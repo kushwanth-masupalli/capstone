@@ -1,0 +1,38 @@
+# Large model files
+*.pt
+*.pth
+*.onnx
+*.h5
+
+# Dataset images (too large for git)
+data/images/*.png
+data/images/preprocessed/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+wandb/
+runs/
