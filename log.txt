@@ -1,0 +1,32 @@
+Chest X-Ray Project - Log
+======================================
+
+Date Completed: August 30, 2026 (Yesterday)
+
+What was done:
+1. CLAHE (Contrast Limited Adaptive Histogram Equalization) applied to all raw chest X-ray images to enhance contrast.
+2. All images resized to 224x224 pixels, matching DenseNet121 input dimensions.
+3. Grayscale images converted to 3-channel RGB format for compatibility with pretrained models.
+4. All 3,999 images successfully preprocessed and saved to data/images/preprocessed/ directory.
+5. Preprocessing is idempotent — re-running the script skips already processed images.
+
+======================================
+
+Date Completed: August 31, 2026 (Today)
+
+What was done:
+1. Analyzed both CSV files (indiana_reports.csv and indiana_projections.csv) to understand structure and columns.
+2. Merged both CSVs on 'uid' to link image filenames with diagnosis labels.
+3. Filtered dataset to Frontal (PA) images only — removed Lateral views to avoid classifier learning view-dependent features instead of pathology.
+4. Built multi-label encoder: parsed 'Problems' column (semicolon-separated) into binary vectors for top 15 most common problems.
+5. Created PyTorch Dataset class (dataset.py) that merges CSVs, filters frontal, applies ImageNet normalization on-the-fly, and splits data 70/15/15 by patient (no data leakage).
+
+Dataset Summary:
+- Total frontal images: 3,818 (out of 7,466)
+- Unique patients: 3,689
+- Train / Validation / Test: 2,663 / 577 / 578
+- Top 15 labels: normal, Lung, Opacity, Calcinosis, Cardiomegaly, Pulmonary Atelectasis, Calcified Granuloma, Thoracic Vertebrae, Cicatrix, Spine, Markings, Aorta, Pleural Effusion, Diaphragm, Density
+
+Next Step: Build DenseNet121 training script with loss function, optimizer, and training loop.
+
+======================================
