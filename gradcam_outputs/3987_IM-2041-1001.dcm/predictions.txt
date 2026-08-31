@@ -1,0 +1,7 @@
+Image: 3987_IM-2041-1001.dcm.png
+
+  normal                     prob=0.644  thresh=0.30 [FLAGGED]
+  Spine                      prob=0.257  thresh=0.25 [FLAGGED]
+  Granuloma                  prob=0.205  thresh=0.35
+  Lung                       prob=0.156  thresh=0.40
+  Nodule                     prob=0.144  thresh=0.15

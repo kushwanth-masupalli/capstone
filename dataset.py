@@ -71,6 +71,123 @@ def load_and_merge_data():
     return frontal
 
 
+# ─── PROBLEM NAME MAPPING ────────────────────────────────────────────────────
+# Maps verbose/inconsistent names to clean, standardized labels
+# This merges similar problems and normalizes naming
+
+PROBLEM_NAME_MAP = {
+    # Lung-related → merge into 'Lung'
+    "Lung": "Lung",
+    "Lung, Hyperlucent": "Lung",
+    "Lung Diseases, Interstitial": "Lung",
+    
+    # Granuloma-related → merge into 'Granuloma'
+    "Calcified Granuloma": "Granuloma",
+    "Granuloma": "Granuloma",
+    "Granulomatous Disease": "Granuloma",
+    "Calcinosis": "Granuloma",
+    
+    # Vertebrae/spine-related → merge into 'Spine'
+    "Thoracic Vertebrae": "Spine",
+    "Spondylosis": "Spine",
+    "Scoliosis": "Spine",
+    
+    # Aorta-related → merge into 'Aorta'
+    "Aorta": "Aorta",
+    "Aorta, Thoracic": "Aorta",
+    "Atherosclerosis": "Aorta",
+    
+    # Airspace-related → merge into 'Opacity'
+    "Opacity": "Opacity",
+    "Airspace Disease": "Opacity",
+    "Consolidation": "Opacity",
+    
+    # Other direct mappings (normalize names)
+    "Cardiomegaly": "Cardiomegaly",
+    "Cardiac Shadow": "Cardiomegaly",
+    "Pulmonary Atelectasis": "Pulmonary Atelectasis",
+    "Pleural Effusion": "Pleural Effusion",
+    "Pulmonary Congestion": "Pulmonary Congestion",
+    "Pulmonary Emphysema": "Pulmonary Emphysema",
+    "Cicatrix": "Cicatrix",
+    "Markings": "Markings",
+    "Diaphragm": "Diaphragm",
+    "Density": "Density",
+    "Nodule": "Nodule",
+    "Deformity": "Deformity",
+    "Osteophyte": "Osteophyte",
+    "Surgical Instruments": "Surgical Instruments",
+    "Catheters, Indwelling": "Catheters",
+    "Fractures, Bone": "Fractures",
+    "Foreign Bodies": "Foreign Bodies",
+    "Breast Implants": "Breast Implants",
+}
+
+# Noise labels to remove entirely
+NOISE_LABELS = {
+    "No Indexing",
+    "Technical Quality of Image Unsatisfactory",
+    "Tube, Inserted",
+    "Implanted Medical Device",
+}
+
+
+def clean_problems(problems_str):
+    """
+    Clean a raw Problems string into standardized label names.
+    
+    Steps:
+    1. Split by semicolon
+    2. Remove noise labels
+    3. Normalize names using PROBLEM_NAME_MAP
+    4. Deduplicate
+    
+    Args:
+        problems_str: raw string like "Calcified Granuloma;Calcified Granuloma"
+        
+    Returns:
+        list of clean, deduplicated label names
+    """
+    if pd.isna(problems_str):
+        return []
+    
+    # Split by semicolon, strip whitespace
+    raw_labels = [p.strip() for p in str(problems_str).split(";") if p.strip()]
+    
+    # Remove noise and normalize
+    clean_labels = []
+    for label in raw_labels:
+        # Skip noise
+        if label in NOISE_LABELS:
+            continue
+        
+        # Map to normalized name
+        normalized = PROBLEM_NAME_MAP.get(label, None)
+        
+        # If not in map, try partial matching
+        if normalized is None:
+            for key, value in PROBLEM_NAME_MAP.items():
+                if key in label:
+                    normalized = value
+                    break
+        
+        # Keep as-is if no mapping found (but still valid)
+        if normalized is None:
+            normalized = label
+        
+        clean_labels.append(normalized)
+    
+    # Deduplicate while preserving order
+    seen = set()
+    unique_labels = []
+    for label in clean_labels:
+        if label not in seen:
+            seen.add(label)
+            unique_labels.append(label)
+    
+    return unique_labels
+
+
 def build_label_encoder(df):
     """
     Parse 'Problems' column into multi-label binary encoding.
@@ -79,7 +196,11 @@ def build_label_encoder(df):
         "Cardiomegaly;Pulmonary Congestion"
         "normal"
     
-    We split by ';', count frequency, and keep the top N most common problems.
+    Steps:
+    1. Clean and normalize problem names
+    2. Remove noise labels
+    3. Deduplicate within each entry
+    4. Count frequency and keep top N
     
     Args:
         df: DataFrame with 'Problems' column
@@ -88,19 +209,14 @@ def build_label_encoder(df):
         label_names: list of problem names (e.g., ['normal', 'Cardiomegaly', ...])
         label_vectors: np.ndarray of shape (n_samples, n_labels) with 0/1 values
     """
-    # Split problems by semicolon and count
+    # Clean and count problems
     problem_counter = Counter()
     all_problems = []
     
     for problems_str in df["Problems"]:
-        if pd.isna(problems_str):
-            all_problems.append([])
-            continue
-        
-        # Split by semicolon, strip whitespace
-        problems = [p.strip() for p in str(problems_str).split(";") if p.strip()]
-        all_problems.append(problems)
-        problem_counter.update(problems)
+        clean_labels = clean_problems(problems_str)
+        all_problems.append(clean_labels)
+        problem_counter.update(clean_labels)
     
     # Filter by minimum sample count
     common_problems = [
@@ -131,6 +247,46 @@ def build_label_encoder(df):
     return label_names, label_vectors
 
 
+# ─── TRANSFORMS ──────────────────────────────────────────────────────────────
+
+def get_eval_transform():
+    """
+    Deterministic transform used for validation and test: just tensor + normalize.
+    No augmentation, so metrics reflect the model's real behavior.
+    """
+    return transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
+
+
+def get_train_transform():
+    """
+    Training-time augmentation.
+
+    With only ~2.6k training images and a full-capacity pretrained backbone,
+    the model overfits within a few epochs without augmentation (train loss
+    keeps dropping while val loss climbs). These are deliberately mild —
+    aggressive crops can crop pathology out of frame, and aggressive color
+    jitter fights the CLAHE preprocessing already applied to these images.
+
+    Horizontal flip is safe here because none of the 15 labels are
+    laterality-specific (e.g. no "left" vs "right" pleural effusion) — the
+    model doesn't need to learn a canonical orientation for any label used.
+    """
+    return transforms.Compose([
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomAffine(
+            degrees=10,             # small rotation
+            translate=(0.05, 0.05),  # small shift
+            scale=(0.95, 1.05),      # small zoom in/out
+        ),
+        transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
+
+
 # ─── PYTORCH DATASET ─────────────────────────────────────────────────────────
 
 class IndianaChestXRayDataset(Dataset):
@@ -141,25 +297,24 @@ class IndianaChestXRayDataset(Dataset):
     ImageNet normalization on-the-fly.
     """
     
-    def __init__(self, df, label_vectors, label_names, transform=None):
+    def __init__(self, df, label_vectors, label_names, transform=None, train=False):
         """
         Args:
             df: DataFrame with 'filename' column
             label_vectors: np.ndarray of shape (n_samples, n_labels)
             label_names: list of problem names
-            transform: torchvision transforms to apply (default: ImageNet norm)
+            transform: torchvision transforms to apply. If None, falls back to
+                get_train_transform() when train=True, else get_eval_transform().
+            train: whether this split should get augmentation when transform
+                is not explicitly given.
         """
         self.df = df.reset_index(drop=True)
         self.label_vectors = label_vectors
         self.label_names = label_names
         self.filenames = df["filename"].values
-        
-        # Default transform: ImageNet normalization
+
         if transform is None:
-            self.transform = transforms.Compose([
-                transforms.ToTensor(),  # Converts HxWxC uint8 [0,255] to CxHxW float [0,1]
-                transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            ])
+            self.transform = get_train_transform() if train else get_eval_transform()
         else:
             self.transform = transform
     
@@ -237,15 +392,17 @@ def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15)
     print(f"Validation: {val_mask.sum()} images ({val_uids.shape[0]} patients)")
     print(f"Test:       {test_mask.sum()} images ({test_uids.shape[0]} patients)")
     
-    # Create datasets
+    # Create datasets — only the training split gets augmentation; val/test
+    # stay deterministic so the metrics you compare across epochs are apples
+    # to apples.
     train_dataset = IndianaChestXRayDataset(
-        df[train_mask], label_vectors[train_mask], label_names
+        df[train_mask], label_vectors[train_mask], label_names, train=True
     )
     val_dataset = IndianaChestXRayDataset(
-        df[val_mask], label_vectors[val_mask], label_names
+        df[val_mask], label_vectors[val_mask], label_names, train=False
     )
     test_dataset = IndianaChestXRayDataset(
-        df[test_mask], label_vectors[test_mask], label_names
+        df[test_mask], label_vectors[test_mask], label_names, train=False
     )
     
     # Create data loaders
@@ -293,4 +450,4 @@ if __name__ == "__main__":
     print(f"\nFirst sample labels:")
     for i, name in enumerate(label_names):
         if labels[0, i] == 1.0:
-            print(f"  ✓ {name}")
+            print(f"  [x] {name}")

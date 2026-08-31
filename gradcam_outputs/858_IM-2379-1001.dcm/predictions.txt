@@ -1,0 +1,7 @@
+Image: 858_IM-2379-1001.dcm.png
+
+  normal                     prob=0.716  thresh=0.30 [FLAGGED]
+  Catheters                  prob=0.302  thresh=0.50
+  Granuloma                  prob=0.210  thresh=0.35
+  Spine                      prob=0.119  thresh=0.25
+  Nodule                     prob=0.109  thresh=0.15
