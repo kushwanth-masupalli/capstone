@@ -1,0 +1,523 @@
+============================================================
+DenseNet121 Chest X-Ray Training
+============================================================
+
+--- Loading Data ---
+Loaded 7466 total images, 3818 frontal images
+Unique patients (frontal): 3689
+
+Top 15 problems (min 10 samples):
+  normal: 1387 images
+  Granuloma: 599 images
+  Spine: 560 images
+  Lung: 552 images
+  Opacity: 500 images
+  Cardiomegaly: 354 images
+  Aorta: 337 images
+  Pulmonary Atelectasis: 308 images
+  Cicatrix: 183 images
+  Diaphragm: 169 images
+  Markings: 151 images
+  Pleural Effusion: 144 images
+  Density: 110 images
+  Catheters: 107 images
+  Nodule: 106 images
+
+Images with at least one label: 3503/3818
+
+=== Dataset Split ===
+Train:      2663 images (2581 patients)
+Validation: 577 images (554 patients)
+Test:       578 images (554 patients)
+
+--- Creating Model ---
+Model: DenseNet121
+  Backbone: Pretrained ImageNet
+  Features: 1024
+  Output: 15 labels (no sigmoid)
+  Device: cuda
+Loaded 7466 total images, 3818 frontal images
+Unique patients (frontal): 3689
+
+Top 15 problems (min 10 samples):
+  normal: 1387 images
+  Granuloma: 599 images
+  Spine: 560 images
+  Lung: 552 images
+  Opacity: 500 images
+  Cardiomegaly: 354 images
+  Aorta: 337 images
+  Pulmonary Atelectasis: 308 images
+  Cicatrix: 183 images
+  Diaphragm: 169 images
+  Markings: 151 images
+  Pleural Effusion: 144 images
+  Density: 110 images
+  Catheters: 107 images
+  Nodule: 106 images
+
+Images with at least one label: 3503/3818
+
+Class weights:
+Loaded 7466 total images, 3818 frontal images
+Unique patients (frontal): 3689
+
+Top 15 problems (min 10 samples):
+  normal: 1387 images
+  Granuloma: 599 images
+  Spine: 560 images
+  Lung: 552 images
+  Opacity: 500 images
+  Cardiomegaly: 354 images
+  Aorta: 337 images
+  Pulmonary Atelectasis: 308 images
+  Cicatrix: 183 images
+  Diaphragm: 169 images
+  Markings: 151 images
+  Pleural Effusion: 144 images
+  Density: 110 images
+  Catheters: 107 images
+  Nodule: 106 images
+
+Images with at least one label: 3503/3818
+  normal                    pos=  772  weight=1.36
+  Granuloma                 pos=  332  weight=3.16
+  Spine                     pos=  308  weight=3.41
+  Lung                      pos=  312  weight=3.37
+  Opacity                   pos=  248  weight=4.23
+  Cardiomegaly              pos=  187  weight=5.61
+  Aorta                     pos=  170  weight=6.18
+  Pulmonary Atelectasis     pos=  154  weight=6.82
+  Cicatrix                  pos=   90  weight=11.67
+  Diaphragm                 pos=   91  weight=11.54
+  Markings                  pos=   78  weight=13.46
+  Pleural Effusion          pos=   72  weight=14.58
+  Density                   pos=   48  weight=21.88
+  Catheters                 pos=   56  weight=18.75
+  Nodule                    pos=   54  weight=19.44
+  (TensorBoard not available, skipping logging)
+
+--- Training for up to 40 epochs (early stopping patience=7) ---
+ Epoch | Train Loss |   Val Loss |   Val F1 |  Val AUC |         LR
+---------------------------------------------------------------------------
+  Batch 50/167 | Loss: 0.9933
+  Batch 100/167 | Loss: 0.7470
+  Batch 150/167 | Loss: 0.6821
+     1 |     0.9014 |     0.8573 |   0.3017 |   0.7188 |   0.000100 | 33.2s
+  >> Best model saved (F1: 0.3017)
+  Batch 50/167 | Loss: 0.6749
+  Batch 100/167 | Loss: 0.6708
+  Batch 150/167 | Loss: 1.0066
+     2 |     0.7566 |     0.8263 |   0.3036 |   0.7361 |   0.000100 | 28.7s
+  >> Best model saved (F1: 0.3036)
+  Batch 50/167 | Loss: 0.9098
+  Batch 100/167 | Loss: 0.7890
+  Batch 150/167 | Loss: 0.8013
+     3 |     0.6682 |     0.8591 |   0.3354 |   0.7777 |   0.000100 | 28.3s
+  >> Best model saved (F1: 0.3354)
+  Batch 50/167 | Loss: 0.5982
+  Batch 100/167 | Loss: 0.4336
+  Batch 150/167 | Loss: 0.4738
+     4 |     0.5677 |     0.8711 |   0.3356 |   0.7713 |   0.000100 | 28.7s
+  >> Best model saved (F1: 0.3356)
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.4973
+  Batch 100/167 | Loss: 0.6218
+  Batch 150/167 | Loss: 0.3364
+     5 |     0.4641 |     0.9665 |   0.4017 |   0.8076 |   0.000100 | 28.7s
+  >> Best model saved (F1: 0.4017)
+  Batch 50/167 | Loss: 0.2861
+  Batch 100/167 | Loss: 0.4007
+  Batch 150/167 | Loss: 0.3385
+     6 |     0.3816 |     0.9445 |   0.3941 |   0.8128 |   0.000050 | 29.0s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.3603
+  Batch 100/167 | Loss: 0.2396
+  Batch 150/167 | Loss: 0.2726
+     7 |     0.3016 |     1.0068 |   0.3950 |   0.8142 |   0.000050 | 29.1s
+  Early stopping counter: 2/7
+  Batch 50/167 | Loss: 0.2806
+  Batch 100/167 | Loss: 0.1881
+  Batch 150/167 | Loss: 0.3060
+     8 |     0.2557 |     1.1072 |   0.3990 |   0.8155 |   0.000050 | 29.0s
+  Early stopping counter: 3/7
+  Batch 50/167 | Loss: 0.1927
+  Batch 100/167 | Loss: 0.1690
+  Batch 150/167 | Loss: 0.1946
+     9 |     0.2204 |     1.1309 |   0.3823 |   0.8068 |   0.000050 | 29.2s
+  Early stopping counter: 4/7
+  Batch 50/167 | Loss: 0.1429
+  Batch 100/167 | Loss: 0.1265
+  Batch 150/167 | Loss: 0.1741
+    10 |     0.1936 |     1.1821 |   0.3788 |   0.8106 |   0.000025 | 29.1s
+  Early stopping counter: 5/7
+  Batch 50/167 | Loss: 0.1870
+  Batch 100/167 | Loss: 0.3015
+  Batch 150/167 | Loss: 0.1947
+    11 |     0.1713 |     1.2334 |   0.3974 |   0.8196 |   0.000025 | 31.7s
+  Early stopping counter: 6/7
+  Batch 50/167 | Loss: 0.2486
+  Batch 100/167 | Loss: 0.1544
+  Batch 150/167 | Loss: 0.1338
+    12 |     0.1545 |     1.2301 |   0.3792 |   0.8128 |   0.000025 | 32.5s
+  Early stopping counter: 6/7
+  Batch 50/167 | Loss: 0.2486
+  Batch 100/167 | Loss: 0.1544
+  Batch 150/167 | Loss: 0.1338
+    12 |     0.1545 |     1.2301 |   0.3792 |   0.8128 |   0.000025 | 32.5s
+  Early stopping counter: 7/7
+
+>> Early stopping triggered at epoch 12
+>> Best validation F1: 0.4017
+
+--- Final Test Evaluation ---
+Test Loss:     1.0365
+Test F1:       0.4082
+Test Precision: 0.3761
+Test Recall:   0.4464
+Test AUC:      0.8138
+
+Best model saved to: checkpoints\best_model.pth
+Training complete!
+(venv) PS C:\Users\masup\OneDrive\Desktop\capstone> python train.py --epochs 40 --batch_size 16 --patience 7
+============================================================
+DenseNet121 Chest X-Ray Training
+============================================================
+
+--- Loading Data ---
+Loaded 7466 total images, 3818 frontal images
+Unique patients (frontal): 3689
+
+Top 15 problems (min 10 samples):
+  normal: 1387 images
+  Granuloma: 599 images
+  Spine: 560 images
+  Lung: 552 images
+  Opacity: 500 images
+  Cardiomegaly: 354 images
+  Aorta: 337 images
+  Pulmonary Atelectasis: 308 images
+  Cicatrix: 183 images
+  Diaphragm: 169 images
+  Markings: 151 images
+  Pleural Effusion: 144 images
+  Density: 110 images
+  Catheters: 107 images
+  Nodule: 106 images
+
+Images with at least one label: 3503/3818
+
+=== Dataset Split ===
+Train:      2663 images (2581 patients)
+Validation: 577 images (554 patients)
+Test:       578 images (554 patients)
+
+--- Creating Model ---
+Model: DenseNet121
+  Backbone: Pretrained ImageNet
+  Features: 1024
+  Output: 15 labels (no sigmoid)
+  Device: cuda
+Loaded 7466 total images, 3818 frontal images
+Unique patients (frontal): 3689
+
+Top 15 problems (min 10 samples):
+  normal: 1387 images
+  Granuloma: 599 images
+  Spine: 560 images
+  Lung: 552 images
+  Opacity: 500 images
+  Cardiomegaly: 354 images
+  Aorta: 337 images
+  Pulmonary Atelectasis: 308 images
+  Cicatrix: 183 images
+  Diaphragm: 169 images
+  Markings: 151 images
+  Pleural Effusion: 144 images
+  Density: 110 images
+  Catheters: 107 images
+  Nodule: 106 images
+
+Images with at least one label: 3503/3818
+
+Class weights:
+Loaded 7466 total images, 3818 frontal images
+Unique patients (frontal): 3689
+
+Top 15 problems (min 10 samples):
+  normal: 1387 images
+  Granuloma: 599 images
+  Spine: 560 images
+  Lung: 552 images
+  Opacity: 500 images
+  Cardiomegaly: 354 images
+  Aorta: 337 images
+  Pulmonary Atelectasis: 308 images
+  Cicatrix: 183 images
+  Diaphragm: 169 images
+  Markings: 151 images
+  Pleural Effusion: 144 images
+  Density: 110 images
+  Catheters: 107 images
+  Nodule: 106 images
+
+Images with at least one label: 3503/3818
+  normal                    pos=  772  weight=1.36
+  Granuloma                 pos=  332  weight=3.16
+  Spine                     pos=  308  weight=3.41
+  Lung                      pos=  312  weight=3.37
+  Opacity                   pos=  248  weight=4.23
+  Cardiomegaly              pos=  187  weight=5.61
+  Aorta                     pos=  170  weight=6.18
+  Pulmonary Atelectasis     pos=  154  weight=6.82
+  Cicatrix                  pos=   90  weight=10.00
+  Diaphragm                 pos=   91  weight=10.00
+  Markings                  pos=   78  weight=10.00
+  Pleural Effusion          pos=   72  weight=10.00
+  Density                   pos=   48  weight=10.00
+  Catheters                 pos=   56  weight=10.00
+  Nodule                    pos=   54  weight=10.00
+
+Backbone frozen for the first 2 epoch(s).
+  (TensorBoard not available, skipping logging)
+
+--- Training for up to 40 epochs (early stopping patience=7) ---
+ Epoch | Train Loss |   Val Loss | Val F1(mi) | Val F1(ma) |  Val AUC |         LR
+-----------------------------------------------------------------------------------------------
+  Batch 50/167 | Loss: 1.0385
+  Batch 100/167 | Loss: 1.1180
+  Batch 150/167 | Loss: 0.8693
+     1 |     0.8785 |     0.8489 |     0.1390 |     0.0434 |   0.6653 |   0.000100 | 21.3s
+  >> Best model saved (F1: 0.1390, macro F1: 0.0434)
+  Batch 50/167 | Loss: 0.7159
+  Batch 100/167 | Loss: 0.8306
+  Batch 150/167 | Loss: 1.0197
+     2 |     0.8577 |     0.8411 |     0.0871 |     0.0364 |   0.6787 |   0.000100 | 18.5s
+  Early stopping counter: 1/7
+  >> Backbone unfrozen at epoch 3
+  Batch 50/167 | Loss: 0.9269
+  Batch 100/167 | Loss: 0.8915
+  Batch 150/167 | Loss: 1.0110
+     3 |     0.8433 |     0.8210 |     0.1810 |     0.0599 |   0.7409 |   0.000100 | 35.1s
+  >> Best model saved (F1: 0.1810, macro F1: 0.0599)
+  Batch 50/167 | Loss: 0.9919
+  Batch 100/167 | Loss: 0.7925
+  Batch 150/167 | Loss: 0.6072
+     4 |     0.8127 |     0.8014 |     0.2083 |     0.0843 |   0.7675 |   0.000100 | 34.3s
+  >> Best model saved (F1: 0.2083, macro F1: 0.0843)
+  Batch 50/167 | Loss: 0.8573
+  Batch 100/167 | Loss: 0.6830
+  Batch 150/167 | Loss: 0.7019
+     5 |     0.7842 |     0.7760 |     0.2943 |     0.1467 |   0.7758 |   0.000100 | 35.3s
+  >> Best model saved (F1: 0.2943, macro F1: 0.1467)
+  Batch 50/167 | Loss: 0.8410
+  Batch 100/167 | Loss: 0.8538
+  Batch 150/167 | Loss: 0.5790
+     6 |     0.7596 |     0.7687 |     0.3271 |     0.1790 |   0.7874 |   0.000100 | 35.8s
+  >> Best model saved (F1: 0.3271, macro F1: 0.1790)
+  Batch 50/167 | Loss: 0.7629
+  Batch 100/167 | Loss: 0.6793
+  Batch 150/167 | Loss: 0.7274
+     7 |     0.7379 |     0.7560 |     0.3501 |     0.2119 |   0.7893 |   0.000100 | 36.8s
+  >> Best model saved (F1: 0.3501, macro F1: 0.2119)
+  Batch 50/167 | Loss: 0.5990
+  Batch 100/167 | Loss: 0.5489
+  Batch 150/167 | Loss: 0.7402
+     8 |     0.7283 |     0.7462 |     0.3427 |     0.2194 |   0.7906 |   0.000100 | 37.5s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.8027
+  Batch 100/167 | Loss: 0.6167
+  Batch 150/167 | Loss: 0.7993
+     9 |     0.7103 |     0.7451 |     0.3655 |     0.2196 |   0.7975 |   0.000100 | 37.9s
+  >> Best model saved (F1: 0.3655, macro F1: 0.2196)
+  Batch 50/167 | Loss: 0.7014
+  Batch 100/167 | Loss: 0.4145
+  Batch 150/167 | Loss: 0.6941
+    10 |     0.7026 |     0.7320 |     0.3485 |     0.2378 |   0.7957 |   0.000100 | 38.3s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.7055
+  Batch 100/167 | Loss: 0.4756
+  Batch 150/167 | Loss: 0.5023
+    11 |     0.6961 |     0.7362 |     0.3591 |     0.2343 |   0.7987 |   0.000100 | 39.5s
+  Early stopping counter: 2/7
+  Batch 50/167 | Loss: 0.5407
+  Batch 100/167 | Loss: 0.7903
+  Batch 150/167 | Loss: 0.6076
+    12 |     0.6914 |     0.7416 |     0.3704 |     0.2424 |   0.8017 |   0.000100 | 42.2s
+  >> Best model saved (F1: 0.3704, macro F1: 0.2424)
+  Batch 50/167 | Loss: 0.7275
+  Batch 100/167 | Loss: 0.7463
+  Batch 150/167 | Loss: 0.7201
+    13 |     0.6679 |     0.7491 |     0.3757 |     0.2490 |   0.8059 |   0.000100 | 41.4s
+  >> Best model saved (F1: 0.3757, macro F1: 0.2490)
+  Batch 50/167 | Loss: 0.7244
+  Batch 100/167 | Loss: 0.6856
+  Batch 150/167 | Loss: 0.8898
+    14 |     0.6689 |     0.7340 |     0.3659 |     0.2532 |   0.7985 |   0.000100 | 43.9s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.7229
+  Batch 100/167 | Loss: 0.7247
+  Batch 150/167 | Loss: 0.7156
+    15 |     0.6641 |     0.7453 |     0.3870 |     0.2568 |   0.8088 |   0.000100 | 40.1s
+  >> Best model saved (F1: 0.3870, macro F1: 0.2568)
+  Batch 50/167 | Loss: 0.5476
+  Batch 100/167 | Loss: 0.7451
+  Batch 150/167 | Loss: 0.8435
+    16 |     0.6579 |     0.7287 |     0.3772 |     0.2606 |   0.8006 |   0.000100 | 44.5s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.5835
+  Batch 100/167 | Loss: 0.7263
+  Batch 150/167 | Loss: 0.5502
+    17 |     0.6446 |     0.7325 |     0.3790 |     0.2639 |   0.8070 |   0.000100 | 37.3s
+  Early stopping counter: 2/7
+  Batch 50/167 | Loss: 0.6645
+  Batch 100/167 | Loss: 0.7126
+  Batch 150/167 | Loss: 0.4428
+    18 |     0.6378 |     0.7244 |     0.3780 |     0.2688 |   0.8043 |   0.000100 | 37.2s
+  Early stopping counter: 3/7
+  Batch 50/167 | Loss: 0.6794
+  Batch 100/167 | Loss: 0.6899
+  Batch 150/167 | Loss: 0.5809
+    19 |     0.6306 |     0.7341 |     0.3815 |     0.2649 |   0.8072 |   0.000050 | 37.5s
+  Early stopping counter: 4/7
+  Batch 50/167 | Loss: 0.5709
+  Batch 100/167 | Loss: 0.8179
+  Batch 150/167 | Loss: 0.6907
+    20 |     0.6200 |     0.7302 |     0.3788 |     0.2631 |   0.8066 |   0.000050 | 38.8s
+  Early stopping counter: 5/7
+  Batch 50/167 | Loss: 0.5539
+  Batch 100/167 | Loss: 0.4578
+  Batch 150/167 | Loss: 0.5567
+    21 |     0.6095 |     0.7337 |     0.3883 |     0.2748 |   0.8054 |   0.000050 | 43.1s
+  >> Best model saved (F1: 0.3883, macro F1: 0.2748)
+  Batch 50/167 | Loss: 0.4815
+  Batch 100/167 | Loss: 0.5206
+  Batch 150/167 | Loss: 0.6481
+    22 |     0.6082 |     0.7331 |     0.3851 |     0.2727 |   0.8037 |   0.000050 | 41.5s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.4491
+  Batch 100/167 | Loss: 0.7654
+  Batch 150/167 | Loss: 0.4518
+    23 |     0.5983 |     0.7379 |     0.3823 |     0.2742 |   0.8058 |   0.000050 | 39.6s
+  Early stopping counter: 2/7
+  Batch 50/167 | Loss: 0.5243
+  Batch 100/167 | Loss: 0.8269
+  Batch 150/167 | Loss: 0.6224
+    24 |     0.5997 |     0.7433 |     0.3859 |     0.2734 |   0.8069 |   0.000050 | 36.9s
+  Early stopping counter: 3/7
+  Batch 50/167 | Loss: 0.7524
+  Batch 100/167 | Loss: 0.5012
+  Batch 150/167 | Loss: 0.6635
+    25 |     0.5914 |     0.7471 |     0.3883 |     0.2760 |   0.8084 |   0.000025 | 40.7s
+  >> Best model saved (F1: 0.3883, macro F1: 0.2760)
+  Early stopping counter: 4/7
+  Batch 50/167 | Loss: 0.4780
+  Batch 100/167 | Loss: 0.6456
+  Batch 150/167 | Loss: 0.6268
+    26 |     0.5915 |     0.7542 |     0.3917 |     0.2741 |   0.8092 |   0.000025 | 45.8s
+  >> Best model saved (F1: 0.3917, macro F1: 0.2741)
+  Batch 50/167 | Loss: 0.7292
+  Batch 100/167 | Loss: 0.6979
+  Batch 150/167 | Loss: 0.4174
+    27 |     0.5881 |     0.7459 |     0.3874 |     0.2813 |   0.8079 |   0.000025 | 45.2s
+  Early stopping counter: 1/7
+  Batch 50/167 | Loss: 0.4655
+  Batch 100/167 | Loss: 0.6506
+  Batch 150/167 | Loss: 0.7678
+    28 |     0.5879 |     0.7585 |     0.3865 |     0.2759 |   0.8086 |   0.000025 | 45.5s
+  Early stopping counter: 2/7
+  Batch 50/167 | Loss: 0.6549
+  Batch 100/167 | Loss: 0.4637
+  Batch 150/167 | Loss: 0.3706
+    29 |     0.5771 |     0.7518 |     0.3903 |     0.2775 |   0.8082 |   0.000025 | 41.8s
+  Early stopping counter: 3/7
+  Batch 50/167 | Loss: 0.5435
+  Batch 100/167 | Loss: 0.5754
+  Batch 150/167 | Loss: 0.7094
+    30 |     0.5815 |     0.7499 |     0.3857 |     0.2800 |   0.8091 |   0.000013 | 42.4s
+  Early stopping counter: 4/7
+  Batch 50/167 | Loss: 0.5661
+  Batch 100/167 | Loss: 0.3843
+  Batch 150/167 | Loss: 0.4654
+    31 |     0.5818 |     0.7384 |     0.3763 |     0.2768 |   0.8018 |   0.000013 | 46.2s
+  Early stopping counter: 5/7
+  Batch 50/167 | Loss: 0.5725
+  Batch 100/167 | Loss: 0.6200
+  Batch 150/167 | Loss: 0.6783
+    32 |     0.5770 |     0.7495 |     0.3919 |     0.2797 |   0.8101 |   0.000013 | 40.0s
+  >> Best model saved (F1: 0.3919, macro F1: 0.2797)
+  Early stopping counter: 6/7
+  Batch 50/167 | Loss: 0.6187
+  Batch 100/167 | Loss: 0.5172
+  Batch 150/167 | Loss: 0.6405
+    33 |     0.5709 |     0.7574 |     0.3883 |     0.2796 |   0.8071 |   0.000013 | 40.5s
+  Early stopping counter: 7/7
+
+>> Early stopping triggered at epoch 33
+>> Best validation F1: 0.3917
+
+--- Loading Best Model For Threshold Tuning & Test Evaluation ---
+
+--- Tuning per-class decision thresholds on validation set ---
+  normal                    threshold=0.30  val F1=0.6621
+  Granuloma                 threshold=0.35  val F1=0.3413
+  Spine                     threshold=0.25  val F1=0.3137
+  Lung                      threshold=0.40  val F1=0.3927
+  Opacity                   threshold=0.50  val F1=0.4780
+  Cardiomegaly              threshold=0.55  val F1=0.5135
+  Aorta                     threshold=0.50  val F1=0.4348
+  Pulmonary Atelectasis     threshold=0.55  val F1=0.4113
+  Cicatrix                  threshold=0.65  val F1=0.2162
+  Diaphragm                 threshold=0.70  val F1=0.1600
+  Markings                  threshold=0.55  val F1=0.1613
+  Pleural Effusion          threshold=0.65  val F1=0.4000
+  Density                   threshold=0.30  val F1=0.1282
+  Catheters                 threshold=0.50  val F1=0.3333
+  Nodule                    threshold=0.15  val F1=0.0530
+
+--- Validation: Per-Class Metrics ---
+Label                         F1  Precision   Recall  Support
+normal                     0.662      0.530    0.881      218
+Granuloma                  0.341      0.239    0.595       84
+Spine                      0.314      0.201    0.719       89
+Lung                       0.393      0.284    0.635       85
+Opacity                    0.478      0.395    0.605       81
+Cardiomegaly               0.514      0.400    0.717       53
+Aorta                      0.435      0.373    0.521       48
+Pulmonary Atelectasis      0.411      0.341    0.518       56
+Cicatrix                   0.216      0.333    0.160       25
+Diaphragm                  0.160      0.250    0.118       17
+Markings                   0.161      0.135    0.200       25
+Pleural Effusion           0.400      0.355    0.458       24
+Density                    0.128      0.083    0.278       18
+Catheters                  0.333      0.257    0.474       19
+Nodule                     0.053      0.028    0.583       12
+
+--- Final Test Evaluation ---
+Test Loss:      0.7904
+Test F1 (micro): 0.3869
+Test F1 (macro): 0.3137
+Test Precision: 0.2860
+Test Recall:    0.5975
+Test AUC:       0.8182
+
+--- Test: Per-Class Metrics ---
+Label                         F1  Precision   Recall  Support
+normal                     0.644      0.503    0.898      205
+Granuloma                  0.324      0.235    0.521       96
+Spine                      0.347      0.216    0.873       79
+Lung                       0.396      0.294    0.604       91
+Opacity                    0.438      0.358    0.564       78
+Cardiomegaly               0.411      0.349    0.500       60
+Aorta                      0.377      0.329    0.441       59
+Pulmonary Atelectasis      0.387      0.320    0.490       49
+Cicatrix                   0.125      0.176    0.097       31
+Diaphragm                  0.057      0.111    0.038       26
+Markings                   0.353      0.300    0.429       28
+Pleural Effusion           0.367      0.360    0.375       24
+Density                    0.051      0.033    0.105       19
+Catheters                  0.318      0.250    0.438       16
+Nodule                     0.111      0.062    0.538       26
+
+Best model saved to: checkpoints\best_model.pth (includes tuned per-class thresholds)
+Training complete!

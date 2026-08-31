@@ -25,7 +25,23 @@ Dataset Summary:
 - Total frontal images: 3,818 (out of 7,466)
 - Unique patients: 3,689
 - Train / Validation / Test: 2,663 / 577 / 578
-- Top 15 labels: normal, Lung, Opacity, Calcinosis, Cardiomegaly, Pulmonary Atelectasis, Calcified Granuloma, Thoracic Vertebrae, Cicatrix, Spine, Markings, Aorta, Pleural Effusion, Diaphragm, Density
+- Top 15 labels: normal, Granuloma, Spine, Lung, Opacity, Cardiomegaly, Aorta, Pulmonary Atelectasis, Cicatrix, Diaphragm, Markings, Pleural Effusion, Density, Catheters, Nodule
+
+======================================
+
+Problems Column Preprocessing Fixes:
+
+1. Removed 'No Indexing' noise (91 images) — not a real diagnosis.
+2. Deduplicated labels within entries — "Calcified Granuloma;Calcified Granuloma" now becomes "Calcified Granuloma".
+3. Normalized inconsistent names — "Lung, Hyperlucent" → "Lung", "Aorta, Thoracic" → "Aorta".
+4. Merged similar problems:
+   - Calcified Granuloma + Calcinosis + Granulomatous Disease → Granuloma (599 images)
+   - Thoracic Vertebrae + Spondylosis + Scoliosis → Spine (560 images)
+   - Lung + Lung, Hyperlucent + Lung Diseases, Interstitial → Lung (552 images)
+   - Aorta + Aorta, Thoracic + Atherosclerosis → Aorta (337 images)
+   - Opacity + Airspace Disease + Consolidation → Opacity (500 images)
+   - Cardiomegaly + Cardiac Shadow → Cardiomegaly (354 images)
+5. Coverage improved: 3,260 → 3,503 images now have at least one label.
 
 Next Step: Build DenseNet121 training script with loss function, optimizer, and training loop.
 
