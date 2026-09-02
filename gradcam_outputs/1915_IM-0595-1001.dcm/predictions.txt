@@ -1,6 +1,0 @@
-Image: 1915_IM-0595-1001.dcm.png
-
-  normal                     prob=0.700  thresh=0.30 [FLAGGED]
-  Granuloma                  prob=0.265  thresh=0.35
-  Spine                      prob=0.256  thresh=0.25 [FLAGGED]
-  Lung                       prob=0.104  thresh=0.40

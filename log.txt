@@ -46,3 +46,55 @@ Problems Column Preprocessing Fixes:
 Next Step: Build DenseNet121 training script with loss function, optimizer, and training loop.
 
 ======================================
+
+Date Completed: August 31, 2026
+
+What was done:
+
+1. Built DenseNet121 training script (train.py) with:
+   - BCEWithLogitsLoss with capped pos_weight for class imbalance
+   - Differential learning rates (1e-4 head, 1e-5 backbone)
+   - Backbone freeze warmup (first 2 epochs)
+   - Gradient clipping (max_norm=5.0)
+   - ReduceLROnPlateau scheduler on val F1
+   - Early stopping (patience=7)
+   - Per-class threshold tuning on validation set
+
+2. Training Results (Run 2 - with improvements):
+   - Test F1 (micro): 0.3869
+   - Test F1 (macro): 0.3137
+   - Test Precision: 0.2860
+   - Test Recall: 0.5975
+   - Test AUC: 0.8182
+   - Best val F1: 0.3917 at epoch 26
+   - Early stopped at epoch 33
+
+3. Per-class threshold tuning results:
+   - Normal: threshold=0.30, F1=0.6621 (best performing class)
+   - Cardiomegaly: threshold=0.55, F1=0.5135
+   - Opacity: threshold=0.50, F1=0.4780
+   - Aorta: threshold=0.50, F1=0.4348
+   - Pulmonary Atelectasis: threshold=0.55, F1=0.4113
+   - Nodule: threshold=0.15, F1=0.0530 (worst — too few samples)
+
+4. Built Grad-CAM explainability module (Phase 4):
+   - src/explainability/gradcam.py — reusable Grad-CAM functions
+   - gradcam_test.py — CLI script for batch heatmap generation
+   - app.py updated with Grad-CAM overlays in web interface
+   - Generated heatmaps for 5 test samples saved to gradcam_outputs/
+
+5. Test web interface (app.py):
+   - Flask app at http://127.0.0.1:5000
+   - Upload chest X-ray, see predictions + Grad-CAM overlays
+   - Top 4 predictions get heatmap visualizations
+
+Known Issues:
+- Classifier still underperforms — F1 ~0.39, AUC ~0.82
+- Rare classes (Density, Nodule, Diaphragm) have very low F1
+- Next planned improvements: switch to EfficientNet-B3, stronger augmentation, drop rarest classes
+
+Checkpoints saved:
+- checkpoints/best_model.pth (epoch 26, includes tuned thresholds)
+- checkpoints/last_model.pth
+
+======================================
