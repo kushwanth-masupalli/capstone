@@ -21,6 +21,14 @@ data/images/*.png
 data/images/preprocessed/
 >>>>>>> 1a48c73 (pre processing done)
 
+# GAN-generated synthetic images (regenerated on demand)
+data/synthetic/
+
+# Pseudo-label pool + labels (NIH images / teacher outputs — regenerated on demand)
+data/pseudo_pool/
+data/pseudo_labels.csv
+data/pseudo_probs.npz
+
 # Python
 __pycache__/
 *.pyc

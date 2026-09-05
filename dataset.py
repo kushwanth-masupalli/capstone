@@ -41,8 +41,9 @@ REPORTS_CSV = DATA_DIR / "indiana_reports.csv"
 PROJECTIONS_CSV = DATA_DIR / "indiana_projections.csv"
 IMAGES_DIR = DATA_DIR / "images" / "preprocessed"
 
-# Multi-label: use top N most common individual problems
-TOP_N_PROBLEMS = 15
+# Multi-label: use top N most common individual problems (pathology only)
+# "normal" is handled implicitly, not as a prediction target
+TOP_N_PROBLEMS = 7
 MIN_SAMPLES = 10  # Minimum samples per problem to include
 
 # ImageNet normalization values
@@ -75,8 +76,10 @@ DEFAULT_BACKBONE = "imagenet"
 # flat vector — the reordering is applied by reorder_labels() after the
 # encoder runs, so dataset.py stays backward-compatible.
 
+# "normal" is NOT a pathology — it's the absence of any finding.
+# We handle it implicitly: if no pathology predicted → "normal".
+# This removes the dominant class that biases the model.
 PATHOLOGY_LABELS = [
-    "normal",
     "Granuloma",
     "Opacity",
     "Degenerative Spine Disease",
@@ -84,21 +87,14 @@ PATHOLOGY_LABELS = [
     "Pulmonary Atelectasis",
     "Pulmonary Hypoinflation",
     "Pulmonary Hyperinflation",
-    "Cicatrix",
-    "Markings",
-    "Tortuous Aorta",
-    "Pleural Effusion",
 ]
 
-ANATOMY_LABELS = [
-    "Aorta",       # bare mention — report gave only location, no finding
-    "Diaphragm",   # bare mention — report gave only location, no finding
-    "Spine",       # bare mention — report gave only location, no finding
-]
+ANATOMY_LABELS = []  # Disable anatomy head initially
 
-assert len(PATHOLOGY_LABELS) + len(ANATOMY_LABELS) == TOP_N_PROBLEMS, (
+# TOP_N_PROBLEMS now refers to pathology labels only (was 8, now 7)
+assert len(PATHOLOGY_LABELS) + len(ANATOMY_LABELS) == 7, (
     f"Taxonomy size mismatch: {len(PATHOLOGY_LABELS)} pathology + "
-    f"{len(ANATOMY_LABELS)} anatomy != TOP_N_PROBLEMS ({TOP_N_PROBLEMS})"
+    f"{len(ANATOMY_LABELS)} anatomy != 7"
 )
 
 
@@ -222,6 +218,7 @@ NOISE_LABELS = {
     "Technical Quality of Image Unsatisfactory",
     "Tube, Inserted",
     "Implanted Medical Device",
+    "normal",  # "normal" is not a pathology target — handled implicitly
 }
 
 
@@ -440,16 +437,16 @@ class XRVPreprocessor:
         self.train = train
         self.resizer = xrv.datasets.XRayResizer(224)
         self.cropper = xrv.datasets.XRayCenterCrop()
-        # Augmentation: same as imagenet pipeline but works on grayscale PIL
+        # Augmentation: more aggressive to match imagenet pipeline
         if train:
             self.augment = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomAffine(
-                    degrees=10,
-                    translate=(0.05, 0.05),
-                    scale=(0.95, 1.05),
+                    degrees=15,
+                    translate=(0.1, 0.1),
+                    scale=(0.85, 1.15),
                 ),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2),
             ])
         else:
             self.augment = None
@@ -471,12 +468,12 @@ class XRVPreprocessor:
         if self.augment is not None:
             img = self.augment(img)
 
-        # Convert to numpy float32, add channel dim: (H, W) -> (1, H, W)
+        # Convert to numpy: (H, W) -> (1, H, W) with range [0, 255]
         img_np = np.array(img).astype(np.float32)
         img_np = img_np[np.newaxis, ...]  # (1, H, W)
 
-        # XRV normalize: maps pixel values to [-1024, 1024] range
-        img_np = xrv.datasets.normalize(img_np, maxval=255.0)
+        # XRV normalize expects 0-255 input
+        img_np = xrv.datasets.normalize(img_np, maxval=255.0)  # maps to [-1024, 1024]
 
         # Resize and center crop
         img_np = self.resizer(img_np)
@@ -503,24 +500,20 @@ def get_train_transform():
     """
     Training-time augmentation.
 
-    With only ~2.6k training images and a full-capacity pretrained backbone,
-    the model overfits within a few epochs without augmentation (train loss
-    keeps dropping while val loss climbs). These are deliberately mild —
-    aggressive crops can crop pathology out of frame, and aggressive color
-    jitter fights the CLAHE preprocessing already applied to these images.
-
-    Horizontal flip is safe here because none of the 15 labels are
-    laterality-specific (e.g. no "left" vs "right" pleural effusion) — the
-    model doesn't need to learn a canonical orientation for any label used.
+    More aggressive augmentation to improve generalization with a small
+    dataset. RandomResizedCrop can help avoid cropping out pathology by
+    varying the crop area. ColorJitter simulates different exposure
+    settings common in clinical X-rays.
     """
     return transforms.Compose([
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomAffine(
-            degrees=10,             # small rotation
-            translate=(0.05, 0.05),  # small shift
-            scale=(0.95, 1.05),      # small zoom in/out
+            degrees=15,             # slightly larger rotation
+            translate=(0.1, 0.1),    # larger shift
+            scale=(0.85, 1.15),     # larger zoom range
         ),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ])
@@ -629,6 +622,45 @@ def get_balanced_sampler(label_vectors):
 
 
 # ─── DATA LOADER FACTORY ─────────────────────────────────────────────────────
+def get_splits(test_size=0.15, val_size=0.15):
+    """
+    Load + merge data, build labels, and split by patient (uid).
+
+    Returns:
+        df: full merged DataFrame
+        label_names: list of pathology label names
+        label_vectors: (n_samples, n_labels) 0/1 matrix aligned to df rows
+        train_mask, val_mask, test_mask: boolean Series aligned to df rows
+    """
+    df = load_and_merge_data()
+    label_names, label_vectors = build_label_encoder(df)
+
+    # Split by patient (uid) to prevent data leakage
+    unique_uids = df["uid"].unique()
+
+    # First split: train+val vs test
+    trainval_uids, test_uids = train_test_split(
+        unique_uids, test_size=test_size, random_state=RANDOM_STATE
+    )
+
+    # Second split: train vs val
+    train_uids, val_uids = train_test_split(
+        trainval_uids, test_size=val_size / (1 - test_size), random_state=RANDOM_STATE
+    )
+
+    # Create masks
+    train_mask = df["uid"].isin(train_uids)
+    val_mask = df["uid"].isin(val_uids)
+    test_mask = df["uid"].isin(test_uids)
+
+    print(f"\n=== Dataset Split ===")
+    print(f"Train:      {train_mask.sum()} images ({train_uids.shape[0]} patients)")
+    print(f"Validation: {val_mask.sum()} images ({val_uids.shape[0]} patients)")
+    print(f"Test:       {test_mask.sum()} images ({test_uids.shape[0]} patients)")
+
+    return df, label_names, label_vectors, train_mask, val_mask, test_mask
+
+
 def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15,
                     backbone="imagenet", balanced_sampling=False):
     """
@@ -649,35 +681,10 @@ def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15,
     Returns:
         train_loader, val_loader, test_loader, label_names
     """
-    # Load and merge data
-    df = load_and_merge_data()
-    
-    # Build label encoder
-    label_names, label_vectors = build_label_encoder(df)
-    
-    # Split by patient (uid) to prevent data leakage
-    unique_uids = df["uid"].unique()
-    
-    # First split: train+val vs test
-    trainval_uids, test_uids = train_test_split(
-        unique_uids, test_size=test_size, random_state=RANDOM_STATE
+    df, label_names, label_vectors, train_mask, val_mask, test_mask = get_splits(
+        test_size=test_size, val_size=val_size
     )
-    
-    # Second split: train vs val
-    train_uids, val_uids = train_test_split(
-        trainval_uids, test_size=val_size / (1 - test_size), random_state=RANDOM_STATE
-    )
-    
-    # Create masks
-    train_mask = df["uid"].isin(train_uids)
-    val_mask = df["uid"].isin(val_uids)
-    test_mask = df["uid"].isin(test_uids)
-    
-    print(f"\n=== Dataset Split ===")
-    print(f"Train:      {train_mask.sum()} images ({train_uids.shape[0]} patients)")
-    print(f"Validation: {val_mask.sum()} images ({val_uids.shape[0]} patients)")
-    print(f"Test:       {test_mask.sum()} images ({test_uids.shape[0]} patients)")
-    
+
     print(f"Backbone: {backbone}")
 
     # Create datasets -- only the training split gets augmentation; val/test
@@ -695,10 +702,9 @@ def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15,
         df[test_mask], label_vectors[test_mask], label_names,
         train=False, backbone=backbone
     )
-    
+
     # Create data loaders
     if balanced_sampling:
-        train_labels = label_vectors[train_mask]
         sampler = get_balanced_sampler(train_labels)
         train_loader = DataLoader(
             train_dataset, batch_size=batch_size, sampler=sampler,
