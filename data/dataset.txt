@@ -1,0 +1,217 @@
+================================================================================
+INDIANA CHEST X-RAY DATASET — PROBLEMS COLUMN STATISTICS
+================================================================================
+Source file : data/indiana_reports.csv
+Analyzed on : 2026-09-05
+
+This file documents the distribution of the "Problems" column (semicolon-
+separated multi-label findings per report) to guide dataset cut-down and
+label-set design for the rebuilt classifier.
+
+--------------------------------------------------------------------------------
+1. FILE OVERVIEW
+--------------------------------------------------------------------------------
+Rows (report-level, one row per uid)   : 3,851
+Columns                               : uid, MeSH, Problems, image, indication,
+                                        comparison, findings, impression
+
+NOTE: This file is report-level. There are 7,470 images in
+data/images/preprocessed/ but only 3,851 reports — the mapping of images to
+reports/uid lives in data/indiana_projections.csv (each report can have
+multiple images, e.g. PA + Lateral views).
+
+--------------------------------------------------------------------------------
+2. PROBLEMS COLUMN — BASIC STATISTICS
+--------------------------------------------------------------------------------
+Rows with a Problems value             : 3,851  (0 null, 0 empty)
+Total problem tokens (after split on ";") : 7,946
+Unique tokens (exact string)           : 121
+Rows containing "No Indexing"          : 92     (noise — not a finding)
+Rows labeled "normal"                  : 1,379  (~36% of reports)
+
+Problems per report:
+  count   reports
+  1       2,233   (58.0%)
+  2         585
+  3         378
+  4         286
+  5         161
+  6          95
+  7          61
+  8          29
+  9          10
+  10          6
+  11          3
+  12          4
+  min / median / max = 1 / 1 / 12
+
+--------------------------------------------------------------------------------
+3. FULL FREQUENCY DISTRIBUTION (exact tokens as stored, 121 unique)
+--------------------------------------------------------------------------------
+Token                                             Count
+--------------------------------------------------------
+normal                                            1,379
+Lung                                                553
+Opacity                                             509
+Cardiomegaly                                        345
+Calcinosis                                          332
+Pulmonary Atelectasis                               330
+Calcified Granuloma                                 276
+Thoracic Vertebrae                                  256
+Cicatrix                                            196
+Spine                                               174
+Markings                                            167
+Pleural Effusion                                    160
+Aorta                                               158
+Diaphragm                                           140
+Density                                             129
+Atherosclerosis                                     125
+Deformity                                           124
+Airspace Disease                                    123
+Catheters, Indwelling                               121
+Scoliosis                                           118
+Nodule                                              116
+Granulomatous Disease                               107
+Surgical Instruments                                105
+No Indexing                                          92
+Aorta, Thoracic                                      89
+Fractures, Bone                                      89
+Technical Quality of Image Unsatisfactory            84
+Costophrenic Angle                                   79
+Osteophyte                                           70
+Pulmonary Congestion                                 68
+Implanted Medical Device                             66
+Spondylosis                                          63
+Infiltrate                                           63
+Emphysema                                            60
+Cardiac Shadow                                       54
+Thickening                                           53
+Granuloma                                            51
+Pulmonary Disease, Chronic Obstructive               48
+Hernia, Hiatal                                       44
+Pulmonary Edema                                      43
+Pneumonia                                            41
+Pulmonary Emphysema                                  36
+Kyphosis                                             35
+Arthritis                                            34
+Foreign Bodies                                       34
+Diaphragmatic Eventration                            34
+Consolidation                                        33
+Bone Diseases, Metabolic                             31
+Tube, Inserted                                       31
+Mediastinum                                          26
+Spinal Fusion                                        26
+Lucency                                              26
+Pneumothorax                                         22
+Medical Device                                       21
+Pulmonary Fibrosis                                   18
+Lung, Hyperlucent                                    18
+Stents                                               18
+Mass                                                 16
+Shoulder                                             15
+Lung Diseases, Interstitial                          14
+Epicardial Fat                                       14
+Pulmonary Artery                                     13
+Lumbar Vertebrae                                     12
+Volume Loss                                          10
+Shift                                                10
+Sclerosis                                            10
+Heart                                                10
+Heart Failure                                         9
+Sutures                                               7
+Hypertension, Pulmonary                               7
+Nipple Shadow                                         7
+Blister                                               6
+Mastectomy                                            6
+Sulcus                                                6
+Pneumonectomy                                         6
+Pericardial Effusion                                  6
+Cavitation                                            6
+Breast Implants                                       5
+Dislocations                                          5
+Subcutaneous Emphysema                                5
+Cysts                                                 5
+Bronchiectasis                                        5
+Hyperostosis, Diffuse Idiopathic Skeletal             5
+Bullous Emphysema                                     4
+Funnel Chest                                          4
+Pneumoperitoneum                                      4
+Aortic Aneurysm                                       4
+Heart Atria                                           4
+Adipose Tissue                                        4
+Cystic Fibrosis                                       4
+Hydropneumothorax                                     4
+Ribs                                                  4
+Bone and Bones                                        3
+Pectus Carinatum                                      3
+Sarcoidosis                                           3
+Pleura                                                3
+Heart Ventricles                                      3
+Contrast Media                                        3
+Cervical Vertebrae                                    2
+Humerus                                               2
+Tuberculosis                                          2
+Hernia, Diaphragmatic                                 2
+Abdomen                                               2
+Lymph Nodes                                           2
+Osteoporosis                                          1
+Expansile Bone Lesions                                 1
+Trachea                                               1
+Fibrosis                                              1
+Colonic Interposition                                 1
+Cholelithiasis                                        1
+Bronchitis                                            1
+Trachea, Carina                                       1
+Thoracic vertebrae                                    1
+Thorax                                                1
+Hypovolemia                                           1
+Hemopneumothorax                                      1
+Subcutaneous  Emphysema (double space)                1
+Lymph nodes                                           1
+Bronchiolitis                                         1
+Blood Vessels                                         1
+Hemothorax                                            1
+
+--------------------------------------------------------------------------------
+4. BANDED SUMMARY (for cut-down decisions)
+--------------------------------------------------------------------------------
+Count band            # tokens   Examples
+>= 100                23         normal, Lung, Opacity, Cardiomegaly, ...
+50–99                 13         No Indexing, Fractures, Bone, ...
+20–49                 25         Pneumonia, Emphysema, Consolidation, ...
+10–19                 18         Mass, Shoulder, Lucency, Heart, ...
+2–9                   27         Tuberculosis, Sarcoidosis, Cysts, ...
+1 (singletons)        15         Osteoporosis, Hemothorax, Bronchitis, ...
+
+~90 of the 121 tokens appear <= 50 times; ~55 tokens appear <= 5 times.
+Tokens below ~10 occurrences are far too rare to be learnable classes.
+
+--------------------------------------------------------------------------------
+5. NOTES / CLEANUP CANDIDATES
+--------------------------------------------------------------------------------
+a) Noise tokens (not diagnoses) — candidates for removal:
+     No Indexing (92), Technical Quality of Image Unsatisfactory (84),
+     Surgical Instruments (105), Catheters, Indwelling (121),
+     Implanted Medical Device (66), Medical Device (21), Tube, Inserted (31),
+     Stents (18), Sutures (7), Contrast Media (3), Mastectomy (6),
+     Breast Implants (5).
+
+b) Anatomy / location tokens (bare body-part mentions, no finding):
+     Lung (553), Thoracic Vertebrae (256), Spine (174), Aorta (158),
+     Aorta, Thoracic (89), Diaphragm (140), Mediastinum (26), Heart (10),
+     Shoulder (15), Costophrenic Angle (79), Cardiac Shadow (54),
+     Pleura (3), Ribs (4), Lumbar Vertebrae (12), etc.
+
+c) Case / spacing duplicates (merge before counting):
+     "Thoracic Vertebrae" (256) + "Thoracic vertebrae" (1)
+     "Lymph Nodes" (2) + "Lymph nodes" (1)
+     "Subcutaneous Emphysema" (5) + "Subcutaneous  Emphysema" (1, double space)
+
+d) Semantic duplicate groups (decide one label per group):
+     Calcified Granuloma (276) + Granuloma (51) + Granulomatous Disease (107)
+     Emphysema (60) + Pulmonary Emphysema (36) + Bullous Emphysema (4)
+     Lung (553) + Lung, Hyperlucent (18) + Lung Diseases, Interstitial (14)
+
+e) "normal" (1,379) is the absence of findings, not a disease — the previous
+   pipeline excluded it as a prediction target (normal = no pathology fired).
+================================================================================
