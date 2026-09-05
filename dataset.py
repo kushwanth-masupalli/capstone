@@ -41,8 +41,15 @@ REPORTS_CSV = DATA_DIR / "indiana_reports.csv"
 PROJECTIONS_CSV = DATA_DIR / "indiana_projections.csv"
 IMAGES_DIR = DATA_DIR / "images" / "preprocessed"
 
-# Multi-label: use top N most common individual problems
-TOP_N_PROBLEMS = 15
+# Semi-supervised pseudo-label expansion (see src/pseudo/). Pseudo-labeled
+# images ONLY ever enter the train split — val/test stay real-only.
+PSEUDO_DIR = DATA_DIR / "pseudo_pool"
+PSEUDO_MANIFEST = DATA_DIR / "pseudo_labels.csv"
+DEFAULT_PSEUDO_WEIGHT = 0.5  # real-labeled examples count 2x a pseudo one
+
+# Multi-label: use top N most common individual problems (pathology only)
+# "normal" is handled implicitly, not as a prediction target
+TOP_N_PROBLEMS = 7
 MIN_SAMPLES = 10  # Minimum samples per problem to include
 
 # ImageNet normalization values
@@ -75,8 +82,10 @@ DEFAULT_BACKBONE = "imagenet"
 # flat vector — the reordering is applied by reorder_labels() after the
 # encoder runs, so dataset.py stays backward-compatible.
 
+# "normal" is NOT a pathology — it's the absence of any finding.
+# We handle it implicitly: if no pathology predicted → "normal".
+# This removes the dominant class that biases the model.
 PATHOLOGY_LABELS = [
-    "normal",
     "Granuloma",
     "Opacity",
     "Degenerative Spine Disease",
@@ -84,21 +93,14 @@ PATHOLOGY_LABELS = [
     "Pulmonary Atelectasis",
     "Pulmonary Hypoinflation",
     "Pulmonary Hyperinflation",
-    "Cicatrix",
-    "Markings",
-    "Tortuous Aorta",
-    "Pleural Effusion",
 ]
 
-ANATOMY_LABELS = [
-    "Aorta",       # bare mention — report gave only location, no finding
-    "Diaphragm",   # bare mention — report gave only location, no finding
-    "Spine",       # bare mention — report gave only location, no finding
-]
+ANATOMY_LABELS = []  # Disable anatomy head initially
 
-assert len(PATHOLOGY_LABELS) + len(ANATOMY_LABELS) == TOP_N_PROBLEMS, (
+# TOP_N_PROBLEMS now refers to pathology labels only (was 8, now 7)
+assert len(PATHOLOGY_LABELS) + len(ANATOMY_LABELS) == 7, (
     f"Taxonomy size mismatch: {len(PATHOLOGY_LABELS)} pathology + "
-    f"{len(ANATOMY_LABELS)} anatomy != TOP_N_PROBLEMS ({TOP_N_PROBLEMS})"
+    f"{len(ANATOMY_LABELS)} anatomy != 7"
 )
 
 
@@ -222,6 +224,7 @@ NOISE_LABELS = {
     "Technical Quality of Image Unsatisfactory",
     "Tube, Inserted",
     "Implanted Medical Device",
+    "normal",  # "normal" is not a pathology target — handled implicitly
 }
 
 
@@ -440,16 +443,16 @@ class XRVPreprocessor:
         self.train = train
         self.resizer = xrv.datasets.XRayResizer(224)
         self.cropper = xrv.datasets.XRayCenterCrop()
-        # Augmentation: same as imagenet pipeline but works on grayscale PIL
+        # Augmentation: more aggressive to match imagenet pipeline
         if train:
             self.augment = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomAffine(
-                    degrees=10,
-                    translate=(0.05, 0.05),
-                    scale=(0.95, 1.05),
+                    degrees=15,
+                    translate=(0.1, 0.1),
+                    scale=(0.85, 1.15),
                 ),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2),
             ])
         else:
             self.augment = None
@@ -471,12 +474,12 @@ class XRVPreprocessor:
         if self.augment is not None:
             img = self.augment(img)
 
-        # Convert to numpy float32, add channel dim: (H, W) -> (1, H, W)
+        # Convert to numpy: (H, W) -> (1, H, W) with range [0, 255]
         img_np = np.array(img).astype(np.float32)
         img_np = img_np[np.newaxis, ...]  # (1, H, W)
 
-        # XRV normalize: maps pixel values to [-1024, 1024] range
-        img_np = xrv.datasets.normalize(img_np, maxval=255.0)
+        # XRV normalize expects 0-255 input
+        img_np = xrv.datasets.normalize(img_np, maxval=255.0)  # maps to [-1024, 1024]
 
         # Resize and center crop
         img_np = self.resizer(img_np)
@@ -503,24 +506,20 @@ def get_train_transform():
     """
     Training-time augmentation.
 
-    With only ~2.6k training images and a full-capacity pretrained backbone,
-    the model overfits within a few epochs without augmentation (train loss
-    keeps dropping while val loss climbs). These are deliberately mild —
-    aggressive crops can crop pathology out of frame, and aggressive color
-    jitter fights the CLAHE preprocessing already applied to these images.
-
-    Horizontal flip is safe here because none of the 15 labels are
-    laterality-specific (e.g. no "left" vs "right" pleural effusion) — the
-    model doesn't need to learn a canonical orientation for any label used.
+    More aggressive augmentation to improve generalization with a small
+    dataset. RandomResizedCrop can help avoid cropping out pathology by
+    varying the crop area. ColorJitter simulates different exposure
+    settings common in clinical X-rays.
     """
     return transforms.Compose([
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomAffine(
-            degrees=10,             # small rotation
-            translate=(0.05, 0.05),  # small shift
-            scale=(0.95, 1.05),      # small zoom in/out
+            degrees=15,             # slightly larger rotation
+            translate=(0.1, 0.1),    # larger shift
+            scale=(0.85, 1.15),     # larger zoom range
         ),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ])
@@ -628,15 +627,160 @@ def get_balanced_sampler(label_vectors):
     return sampler
 
 
+def build_train_sampler(real_label_vectors, n_pseudo=0,
+                        pseudo_weight=DEFAULT_PSEUDO_WEIGHT,
+                        balanced_sampling=False):
+    """
+    Decide the train DataLoader sampler for a real + pseudo-labeled mix.
+
+    The methodology hedge from the pseudo-labeling plan: real-labeled images
+    carry more weight than pseudo-labeled ones (1.0 vs 0.5 by default), so
+    pseudo-label noise can't dominate the gradient just because there are
+    more pseudo rows. Implemented as draw-probabilities on the sampler.
+
+    - n_pseudo == 0:          fall back to existing behavior (None = plain
+                              shuffle, or get_balanced_sampler if requested).
+    - balanced_sampling:      REAL rows keep their per-class inverse-frequency
+                              weights (rare IU classes still get oversampled),
+                              normalized so the mean real weight = 1.0; every
+                              pseudo row gets `pseudo_weight`.
+    - balanced_sampling off:  every real row weight 1.0, every pseudo row
+                              weight `pseudo_weight`.
+
+    Returns a WeightedRandomSampler over real+pseudo rows, or None.
+    """
+    n_real = len(real_label_vectors)
+    if n_pseudo == 0:
+        if balanced_sampling:
+            return get_balanced_sampler(real_label_vectors)
+        return None
+
+    if balanced_sampling:
+        pos_counts = real_label_vectors.sum(axis=0)
+        class_weights = 1.0 / (pos_counts + 1.0)
+        real_weights = (real_label_vectors * class_weights).sum(axis=1)
+        pos = real_weights[real_weights > 0]
+        if len(pos):
+            real_weights = np.maximum(real_weights, pos.min())
+        real_weights = real_weights / real_weights.mean()  # mean real weight = 1.0
+    else:
+        real_weights = np.ones(n_real, dtype=np.float32)
+
+    weights = np.concatenate([real_weights, np.full(n_pseudo, pseudo_weight)])
+    n_total = n_real + n_pseudo
+    print(f"\nReal/pseudo sampling: {n_real} real (mean weight 1.0) + "
+          f"{n_pseudo} pseudo (weight {pseudo_weight}) - pseudo rows drawn at "
+          f"{pseudo_weight * 100:.0f}% the rate of real rows")
+    return WeightedRandomSampler(weights=weights, num_samples=n_total, replacement=True)
+
+
 # ─── DATA LOADER FACTORY ─────────────────────────────────────────────────────
+def get_splits(test_size=0.15, val_size=0.15):
+    """
+    Load + merge data, build labels, and split by patient (uid).
+
+    Returns:
+        df: full merged DataFrame
+        label_names: list of pathology label names
+        label_vectors: (n_samples, n_labels) 0/1 matrix aligned to df rows
+        train_mask, val_mask, test_mask: boolean Series aligned to df rows
+    """
+    df = load_and_merge_data()
+    label_names, label_vectors = build_label_encoder(df)
+
+    # Split by patient (uid) to prevent data leakage
+    unique_uids = df["uid"].unique()
+
+    # First split: train+val vs test
+    trainval_uids, test_uids = train_test_split(
+        unique_uids, test_size=test_size, random_state=RANDOM_STATE
+    )
+
+    # Second split: train vs val
+    train_uids, val_uids = train_test_split(
+        trainval_uids, test_size=val_size / (1 - test_size), random_state=RANDOM_STATE
+    )
+
+    # Create masks
+    train_mask = df["uid"].isin(train_uids)
+    val_mask = df["uid"].isin(val_uids)
+    test_mask = df["uid"].isin(test_uids)
+
+    print(f"\n=== Dataset Split ===")
+    print(f"Train:      {train_mask.sum()} images ({train_uids.shape[0]} patients)")
+    print(f"Validation: {val_mask.sum()} images ({val_uids.shape[0]} patients)")
+    print(f"Test:       {test_mask.sum()} images ({test_uids.shape[0]} patients)")
+
+    return df, label_names, label_vectors, train_mask, val_mask, test_mask
+
+
+class PseudoLabeledDataset(Dataset):
+    """
+    Train-only Dataset of REAL NIH pool images with teacher pseudo-labels.
+
+    Reads the manifest written by src/pseudo/generate_pseudo_labels.py:
+    one row per kept pool image, with a 'filename' column plus one 0/1
+    column per pathology label (prob columns are ignored here). Labels are
+    multi-hot: only the classes the teacher was confidently sure about are
+    set to 1, everything else stays 0 — this is what makes the labels
+    precision-biased rather than forced.
+
+    Only the train split ever constructs this class (see get_dataloaders).
+    """
+
+    def __init__(self, manifest_csv, pseudo_dir, label_names, transform):
+        import pandas as pd
+        self.label_names = label_names
+        self.transform = transform
+        self.pseudo_dir = Path(pseudo_dir)
+
+        df = pd.read_csv(manifest_csv)
+        if "filename" not in df.columns:
+            raise ValueError(f"{manifest_csv} is missing the 'filename' column")
+        missing = [c for c in label_names if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"{manifest_csv} is missing label columns {missing} — "
+                f"regenerate it with src/pseudo/generate_pseudo_labels.py"
+            )
+
+        # Drop rows whose pool image is missing (e.g. partial cleanup)
+        df = df[df["filename"].apply(lambda f: (self.pseudo_dir / f).is_file())]
+
+        self.filenames = df["filename"].values
+        self.label_vectors = df[label_names].values.astype(np.float32)
+        print(f"  [pseudo] {manifest_csv}: {len(self.filenames)} pool images loaded "
+              f"from {self.pseudo_dir} "
+              f"({int(self.label_vectors.sum())} positive pseudo-labels)")
+
+    def __len__(self):
+        return len(self.filenames)
+
+    def __getitem__(self, idx):
+        img_path = self.pseudo_dir / self.filenames[idx]
+        image = Image.open(img_path).convert("RGB")
+        image = self.transform(image)
+        labels = torch.tensor(self.label_vectors[idx], dtype=torch.float32)
+        return image, labels
+
+
 def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15,
-                    backbone="imagenet", balanced_sampling=False):
+                    backbone="imagenet", balanced_sampling=False,
+                    pseudo_csv=None, pseudo_dir=None,
+                    pseudo_weight=DEFAULT_PSEUDO_WEIGHT):
     """
     Create train, validation, and test DataLoaders.
 
     Split strategy:
         - 70% train, 15% validation, 15% test
         - Split by patient (uid) to avoid data leakage
+
+    Pseudo-label expansion (optional, from src/pseudo/):
+        - If pseudo_csv is given, the pseudo-labeled REAL pool images listed
+          in it are appended to the TRAIN split ONLY. Validation and test
+          stay 100% real IU images (Phase 0 rule of the pseudo-labeling
+          plan). Pseudo rows are drawn at `pseudo_weight` the rate of real
+          rows so noisy pseudo-labels can't dominate the gradient.
 
     Args:
         batch_size: Batch size for DataLoaders
@@ -645,39 +789,19 @@ def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15,
         val_size: Fraction of data for validation
         backbone: "imagenet" (default) or "xrv" for TorchXRayVision
         balanced_sampling: If True, use WeightedRandomSampler for training
+        pseudo_csv: Optional pseudo-label manifest from generate_pseudo_labels.py
+        pseudo_dir: Folder the manifest's filenames are relative to
+            (default: data/pseudo_pool)
+        pseudo_weight: Relative draw weight of pseudo vs real train rows
+            (default 0.5)
 
     Returns:
         train_loader, val_loader, test_loader, label_names
     """
-    # Load and merge data
-    df = load_and_merge_data()
-    
-    # Build label encoder
-    label_names, label_vectors = build_label_encoder(df)
-    
-    # Split by patient (uid) to prevent data leakage
-    unique_uids = df["uid"].unique()
-    
-    # First split: train+val vs test
-    trainval_uids, test_uids = train_test_split(
-        unique_uids, test_size=test_size, random_state=RANDOM_STATE
+    df, label_names, label_vectors, train_mask, val_mask, test_mask = get_splits(
+        test_size=test_size, val_size=val_size
     )
-    
-    # Second split: train vs val
-    train_uids, val_uids = train_test_split(
-        trainval_uids, test_size=val_size / (1 - test_size), random_state=RANDOM_STATE
-    )
-    
-    # Create masks
-    train_mask = df["uid"].isin(train_uids)
-    val_mask = df["uid"].isin(val_uids)
-    test_mask = df["uid"].isin(test_uids)
-    
-    print(f"\n=== Dataset Split ===")
-    print(f"Train:      {train_mask.sum()} images ({train_uids.shape[0]} patients)")
-    print(f"Validation: {val_mask.sum()} images ({val_uids.shape[0]} patients)")
-    print(f"Test:       {test_mask.sum()} images ({test_uids.shape[0]} patients)")
-    
+
     print(f"Backbone: {backbone}")
 
     # Create datasets -- only the training split gets augmentation; val/test
@@ -695,10 +819,51 @@ def get_dataloaders(batch_size=16, num_workers=0, test_size=0.15, val_size=0.15,
         df[test_mask], label_vectors[test_mask], label_names,
         train=False, backbone=backbone
     )
-    
+
+    train_labels = label_vectors[train_mask]
+
+    # Optional: append pseudo-labeled REAL pool images to the train split only.
+    n_pseudo = 0
+    pseudo_active = False
+    if pseudo_csv:
+        pseudo_manifest = Path(pseudo_csv)
+        if not pseudo_manifest.is_file():
+            raise FileNotFoundError(
+                f"pseudo manifest not found: {pseudo_manifest} — run "
+                f"python -m src.pseudo.generate_pseudo_labels first"
+            )
+        pseudo_root = Path(pseudo_dir) if pseudo_dir else PSEUDO_DIR
+        if backbone == "xrv":
+            pseudo_transform = XRVPreprocessor(train=True)
+        else:
+            pseudo_transform = get_train_transform()
+        pseudo_dataset = PseudoLabeledDataset(
+            pseudo_manifest, pseudo_root, label_names, pseudo_transform
+        )
+        if len(pseudo_dataset) > 0:
+            train_dataset = torch.utils.data.ConcatDataset([train_dataset, pseudo_dataset])
+            train_labels = np.vstack([train_labels, pseudo_dataset.label_vectors])
+            n_pseudo = len(pseudo_dataset)
+            pseudo_active = True
+            print(f"  >> Pseudo-label expansion: +{n_pseudo} real pool images added to TRAIN only "
+                  f"(val/test untouched, real IU only)")
+        else:
+            print(f"  >> [pseudo] WARNING: no usable rows in {pseudo_manifest} "
+                  f"(all pool images missing?); training real-only.")
+
     # Create data loaders
-    if balanced_sampling:
-        train_labels = label_vectors[train_mask]
+    if pseudo_active:
+        # Real rows keep their (optionally class-balanced) weight of 1.0 on
+        # average; pseudo rows are drawn at pseudo_weight of that.
+        sampler = build_train_sampler(
+            label_vectors[train_mask], n_pseudo=n_pseudo,
+            pseudo_weight=pseudo_weight, balanced_sampling=balanced_sampling,
+        )
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, sampler=sampler,
+            num_workers=num_workers, pin_memory=True
+        )
+    elif balanced_sampling:
         sampler = get_balanced_sampler(train_labels)
         train_loader = DataLoader(
             train_dataset, batch_size=batch_size, sampler=sampler,

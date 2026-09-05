@@ -7,17 +7,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import cv2
+# pyrefly: ignore [missing-import]
 from flask import Flask, request, render_template_string
 from PIL import Image
+# pyrefly: ignore [missing-import]
 from torchvision import models
 
 try:
+    # pyrefly: ignore [missing-import]
     import torchxrayvision as xrv
     HAS_XRV = True
 except ImportError:
     HAS_XRV = False
-
+# pyrefly: ignore [missing-import]
 from pytorch_grad_cam import GradCAM
+# pyrefly: ignore [missing-import]
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
 app = Flask(__name__)
@@ -28,6 +32,7 @@ CHECKPOINT_PATH = "checkpoints/best_model.pth"
 # ── Two-head classifier (must match train.py) ────────────────────────────────
 
 class TwoHeadClassifier(nn.Module):
+    """Matches train.py: anatomy head only exists when n_anatomy > 0."""
     def __init__(self, features_module, n_pathology=10, n_anatomy=5):
         super().__init__()
         self.features = features_module
@@ -37,10 +42,13 @@ class TwoHeadClassifier(nn.Module):
             nn.Dropout(p=0.3),
             nn.Linear(1024, n_pathology),
         )
-        self.anatomy_head = nn.Sequential(
-            nn.Dropout(p=0.3),
-            nn.Linear(1024, n_anatomy),
-        )
+        if n_anatomy > 0:
+            self.anatomy_head = nn.Sequential(
+                nn.Dropout(p=0.3),
+                nn.Linear(1024, n_anatomy),
+            )
+        else:
+            self.anatomy_head = None
 
     def forward(self, x):
         feat = self.features(x)
@@ -48,11 +56,13 @@ class TwoHeadClassifier(nn.Module):
         feat = F.adaptive_avg_pool2d(feat, (1, 1))
         feat = torch.flatten(feat, 1)
         path_out = self.pathology_head(feat)
-        anat_out = self.anatomy_head(feat)
-        return torch.cat([path_out, anat_out], dim=1)
+        if self.anatomy_head is not None:
+            anat_out = self.anatomy_head(feat)
+            return torch.cat([path_out, anat_out], dim=1)
+        return path_out
 
 
-# ── Model loading ─────────────────────────────────────────────────────────────
+
 
 def load_model():
     checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE, weights_only=False)
@@ -88,7 +98,7 @@ def load_model():
 
 model, label_names, thresholds, target_layer, backbone = load_model()
 
-# ── Preprocessing ─────────────────────────────────────────────────────────────
+
 
 if backbone == "xrv" and HAS_XRV:
     _xrv_resizer = xrv.datasets.XRayResizer(224)
@@ -107,6 +117,7 @@ if backbone == "xrv" and HAS_XRV:
         """Return 224×224 float32 RGB array [0,1] for Grad-CAM overlay."""
         return np.array(img.resize((224, 224))).astype(np.float32) / 255.0
 else:
+    # pyrefly: ignore [missing-import]
     from torchvision import transforms
     _eval_transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -128,7 +139,6 @@ def img_to_b64(arr):
     return base64.b64encode(buf).decode("utf-8")
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/", methods=["GET", "POST"])
 def index():

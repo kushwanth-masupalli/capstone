@@ -10,6 +10,10 @@ Usage:
     python train.py --backbone xrv --xrv_checkpoint densenet121-res224-nih
     python train.py --epochs 30                  # Custom epochs
     python train.py --batch_size 32              # Custom batch size
+
+Pseudo-label expansion (semi-supervised self-training, see PSEUDO_LABELING.md):
+    python train.py --backbone xrv --epochs 80 --balanced_sampling --focal_loss \
+        --save_prefix pseudo_ --pseudo_csv data/pseudo_labels.csv
 """
 
 import os
@@ -36,29 +40,32 @@ from dataset import get_dataloaders
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
 # Training hyperparameters
-DEFAULT_EPOCHS = 40
+DEFAULT_EPOCHS = 80
 DEFAULT_BATCH_SIZE = 16
-DEFAULT_LEARNING_RATE = 1e-4       # LR for the new classifier head
-DEFAULT_BACKBONE_LR = 1e-5         # Lower LR for the pretrained backbone
-DEFAULT_WEIGHT_DECAY = 1e-5
-DEFAULT_PATIENCE = 7  # Early stopping patience
-DEFAULT_MAX_POS_WEIGHT = 10.0      # Cap on BCE pos_weight for rare classes
-DEFAULT_FREEZE_EPOCHS = 2          # Epochs to keep backbone frozen at the start
+DEFAULT_LEARNING_RATE = 1e-3       # Higher LR for heads (was 3e-4)
+DEFAULT_BACKBONE_LR = 1e-5         # Much lower LR for backbone (was 5e-5)
+DEFAULT_WEIGHT_DECAY = 1e-4        # Stronger weight decay (was 1e-5)
+DEFAULT_PATIENCE = 20              # More patience (was 15)
+DEFAULT_MAX_POS_WEIGHT = 50.0      # Much higher cap for rare classes (was 10.0)
+DEFAULT_FREEZE_EPOCHS = 5          # Freeze backbone longer initially (was 2)
 
 # XRV-specific defaults (more aggressive fine-tuning since already CXR-pretrained)
 XRV_BACKBONE_LR = 5e-5             # Higher LR for CXR-pretrained backbone
-XRV_FREEZE_EPOCHS = 0              # Don't freeze — already domain-adapted
-XRV_DROPOUT = 0.3                  # Lighter dropout for XRV heads
+XRV_FREEZE_EPOCHS = 3              # Freeze for a few epochs even for XRV
+XRV_DROPOUT = 0.5                  # Stronger dropout for XRV heads (was 0.3)
+
+# ResNet50-specific defaults
+RESNET50_FEATURE_DIM = 2048
 
 # Focal loss defaults
 DEFAULT_FOCAL_ALPHA = 0.25
 DEFAULT_FOCAL_GAMMA = 2.0
 
-# Label smoothing (0.0 = disabled)
-DEFAULT_LABEL_SMOOTHING = 0.0
+# Label smoothing (0.0 = disabled) — enables soft labels to prevent overconfidence
+DEFAULT_LABEL_SMOOTHING = 0.05
 
 # Model
-NUM_LABELS = 15  # Top 15 problems
+NUM_LABELS = 7  # Top 7 pathology problems (normal handled implicitly)
 PRETRAINED = True  # Use ImageNet pretrained weights
 
 # Checkpointing
@@ -80,7 +87,7 @@ N_ANATOMY = len(ANATOMY_LABELS)      # 5
 
 class TwoHeadClassifier(nn.Module):
     """
-    DenseNet121 with two separate linear heads sharing one feature extractor.
+    Two-head classifier: any backbone's feature extractor + two linear heads.
 
     pathology_head: outputs logits for disease-finding labels (used for
         hallucination detection in Phase 8).
@@ -92,46 +99,55 @@ class TwoHeadClassifier(nn.Module):
     (validate, threshold tuning, per-class metrics) working unchanged.
     """
 
-    def __init__(self, features_module, n_pathology=N_PATHOLOGY,
-                 n_anatomy=N_ANATOMY):
+    def __init__(self, features_module, feature_dim=1024,
+                 n_pathology=N_PATHOLOGY, n_anatomy=N_ANATOMY,
+                 dropout=0.5):
         super().__init__()
         self.features = features_module
+        self.feature_dim = feature_dim
         self.n_pathology = n_pathology
         self.n_anatomy = n_anatomy
 
         self.pathology_head = nn.Sequential(
-            nn.Dropout(p=0.3),
-            nn.Linear(1024, n_pathology),
+            nn.Dropout(p=dropout),
+            nn.Linear(feature_dim, n_pathology),
         )
-        self.anatomy_head = nn.Sequential(
-            nn.Dropout(p=0.3),
-            nn.Linear(1024, n_anatomy),
-        )
+        # Only create anatomy head if there are anatomy labels
+        if n_anatomy > 0:
+            self.anatomy_head = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(feature_dim, n_anatomy),
+            )
+        else:
+            self.anatomy_head = None
 
     def forward(self, x):
         feat = self.features(x)
         feat = torch.nn.functional.relu(feat)
         feat = torch.nn.functional.adaptive_avg_pool2d(feat, (1, 1))
-        feat = torch.flatten(feat, 1)              # (B, 1024)
+        feat = torch.flatten(feat, 1)              # (B, feature_dim)
 
         path_out = self.pathology_head(feat)       # (B, n_pathology)
-        anat_out = self.anatomy_head(feat)          # (B, n_anatomy)
-        return torch.cat([path_out, anat_out], dim=1)  # (B, 15)
+        if self.anatomy_head is not None:
+            anat_out = self.anatomy_head(feat)      # (B, n_anatomy)
+            return torch.cat([path_out, anat_out], dim=1)
+        return path_out  # (B, n_pathology)
 
 
 def create_model(num_labels=NUM_LABELS, pretrained=PRETRAINED,
                  backbone="imagenet", xrv_checkpoint="densenet121-res224-chex"):
     """
-    Create DenseNet121 with two-head classifier.
+    Create two-head classifier with various backbone options.
 
-    Supports two backbones:
+    Supports three backbones:
         backbone="imagenet": torchvision DenseNet121 pretrained on ImageNet
         backbone="xrv": TorchXRayVision DenseNet pretrained on CXR datasets
+        backbone="resnet50": torchvision ResNet50 pretrained on ImageNet
 
     Args:
         num_labels: Total number of output labels (pathology + anatomy)
-        pretrained: Use ImageNet pretrained weights (only for imagenet backbone)
-        backbone: "imagenet" or "xrv"
+        pretrained: Use ImageNet pretrained weights (only for imagenet/resnet50)
+        backbone: "imagenet", "xrv", or "resnet50"
         xrv_checkpoint: XRV weights to load (only for xrv backbone)
 
     Returns:
@@ -146,9 +162,10 @@ def create_model(num_labels=NUM_LABELS, pretrained=PRETRAINED,
         import torchxrayvision as xrv
         print(f"Loading XRV DenseNet: {xrv_checkpoint}")
         xrv_model = xrv.models.DenseNet(weights=xrv_checkpoint)
-        model = TwoHeadClassifier(xrv_model.features).to(DEVICE)
+        model = TwoHeadClassifier(xrv_model.features, feature_dim=1024, dropout=XRV_DROPOUT).to(DEVICE)
         print(f"Model: DenseNet121 Two-Head (XRV backbone)")
         print(f"  Checkpoint: {xrv_checkpoint}")
+        print(f"  Dropout: {XRV_DROPOUT}")
         # Verify feature dimensions match expectations
         with torch.no_grad():
             _dummy = torch.randn(1, 1, 224, 224, device=DEVICE)
@@ -158,7 +175,27 @@ def create_model(num_labels=NUM_LABELS, pretrained=PRETRAINED,
             _feat = torch.flatten(_feat, 1)
             print(f"  Feature verification: features->({list(model.features(_dummy).shape)}) -> head({_feat.shape[1]})")
             del _dummy, _feat
-    else:
+    elif backbone == "resnet50":
+        from torchvision import models
+        print("Loading ResNet50 backbone")
+        if pretrained:
+            resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+        else:
+            resnet = models.resnet50(weights=None)
+        # Remove avgpool and fc, keep everything up to layer4
+        resnet_features = nn.Sequential(*list(resnet.children())[:-2])
+        model = TwoHeadClassifier(resnet_features, feature_dim=RESNET50_FEATURE_DIM).to(DEVICE)
+        print(f"Model: ResNet50 Two-Head (ImageNet backbone)")
+        # Verify feature dimensions
+        with torch.no_grad():
+            _dummy = torch.randn(1, 3, 224, 224, device=DEVICE)
+            _feat = model.features(_dummy)
+            _feat = torch.nn.functional.relu(_feat)
+            _feat = torch.nn.functional.adaptive_avg_pool2d(_feat, (1, 1))
+            _feat = torch.flatten(_feat, 1)
+            print(f"  Feature verification: features->({list(model.features(_dummy).shape)}) -> head({_feat.shape[1]})")
+            del _dummy, _feat
+    else:  # imagenet
         from torchvision import models
         if pretrained:
             densenet = models.densenet121(
@@ -166,10 +203,11 @@ def create_model(num_labels=NUM_LABELS, pretrained=PRETRAINED,
             )
         else:
             densenet = models.densenet121(weights=None)
-        model = TwoHeadClassifier(densenet.features)
+        model = TwoHeadClassifier(densenet.features, feature_dim=1024)
         print(f"Model: DenseNet121 Two-Head (ImageNet backbone)")
 
-    print(f"  Features: 1024")
+    feat_dim = model.feature_dim
+    print(f"  Features: {feat_dim}")
     print(f"  Pathology head: {N_PATHOLOGY} labels  {PATHOLOGY_LABELS}")
     print(f"  Anatomy head:   {N_ANATOMY} labels  {ANATOMY_LABELS}")
     print(f"  Output: {num_labels} labels (pathology-first, anatomy-second)")
@@ -240,7 +278,7 @@ def create_two_head_loss(label_vectors_train, max_pos_weight=DEFAULT_MAX_POS_WEI
     """
     all_weights = compute_pos_weights(label_vectors_train, max_pos_weight)
     path_weights = all_weights[:N_PATHOLOGY]
-    anat_weights = all_weights[N_PATHOLOGY:]
+    anat_weights = all_weights[N_PATHOLOGY:] if N_ANATOMY > 0 else None
 
     if use_focal:
         print(f"\nUsing Focal Loss (alpha={focal_alpha}, gamma={focal_gamma})")
@@ -250,15 +288,16 @@ def create_two_head_loss(label_vectors_train, max_pos_weight=DEFAULT_MAX_POS_WEI
         anat_criterion = _focal
     else:
         path_criterion = nn.BCEWithLogitsLoss(pos_weight=path_weights)
-        anat_criterion = nn.BCEWithLogitsLoss(pos_weight=anat_weights)
+        anat_criterion = nn.BCEWithLogitsLoss(pos_weight=anat_weights) if N_ANATOMY > 0 else None
 
     print(f"\nClass weights (pathology head):")
     for i, name in enumerate(PATHOLOGY_LABELS):
         print(f"  {name:25s} pos={int(label_vectors_train[:, i].sum()):5d}  weight={path_weights[i]:.2f}")
-    print(f"\nClass weights (anatomy head, weight={anatomy_loss_weight}):")
-    for i, name in enumerate(ANATOMY_LABELS):
-        j = N_PATHOLOGY + i
-        print(f"  {name:25s} pos={int(label_vectors_train[:, j].sum()):5d}  weight={anat_weights[i]:.2f}")
+    if N_ANATOMY > 0:
+        print(f"\nClass weights (anatomy head, weight={anatomy_loss_weight}):")
+        for i, name in enumerate(ANATOMY_LABELS):
+            j = N_PATHOLOGY + i
+            print(f"  {name:25s} pos={int(label_vectors_train[:, j].sum()):5d}  weight={anat_weights[i]:.2f}")
 
     def loss_fn(images, labels, model):
         outputs = model(images)
@@ -269,75 +308,145 @@ def create_two_head_loss(label_vectors_train, max_pos_weight=DEFAULT_MAX_POS_WEI
         else:
             smooth_labels = labels
 
-        if use_focal:
-            path_loss = path_criterion(
-                outputs[:, :N_PATHOLOGY], smooth_labels[:, :N_PATHOLOGY], path_weights
-            )
-            anat_loss = anat_criterion(
-                outputs[:, N_PATHOLOGY:], smooth_labels[:, N_PATHOLOGY:], anat_weights
-            )
+        if N_ANATOMY > 0 and anat_criterion is not None:
+            if use_focal:
+                path_loss = path_criterion(
+                    outputs[:, :N_PATHOLOGY], smooth_labels[:, :N_PATHOLOGY], path_weights
+                )
+                anat_loss = anat_criterion(
+                    outputs[:, N_PATHOLOGY:], smooth_labels[:, N_PATHOLOGY:], anat_weights
+                )
+            else:
+                path_loss = path_criterion(outputs[:, :N_PATHOLOGY], smooth_labels[:, :N_PATHOLOGY])
+                anat_loss = anat_criterion(outputs[:, N_PATHOLOGY:], smooth_labels[:, N_PATHOLOGY:])
+            total = path_loss + anatomy_loss_weight * anat_loss
         else:
-            path_loss = path_criterion(outputs[:, :N_PATHOLOGY], smooth_labels[:, :N_PATHOLOGY])
-            anat_loss = anat_criterion(outputs[:, N_PATHOLOGY:], smooth_labels[:, N_PATHOLOGY:])
+            # Pathology only — no anatomy head
+            if use_focal:
+                path_loss = path_criterion(outputs, smooth_labels, path_weights)
+            else:
+                path_loss = path_criterion(outputs, smooth_labels)
+            anat_loss = torch.tensor(0.0, device=images.device)
+            total = path_loss
 
-        total = path_loss + anatomy_loss_weight * anat_loss
         return total, path_loss, anat_loss
 
     return loss_fn, all_weights
 
 
+# ─── CUTMIX / MIXUP ────────────────────────────────────────────────────────
+
+class CutMix:
+    """CutMix augmentation for multi-label classification.
+
+    Cuts a random rectangular region from one image and pastes it onto
+    another, mixing labels proportionally to the area ratio.
+    """
+
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha
+
+    def __call__(self, images, labels):
+        batch_size = images.size(0)
+        lam = np.random.beta(self.alpha, self.alpha)
+        rand_idx = torch.randperm(batch_size, device=images.device)
+
+        # Random bounding box
+        _, _, H, W = images.shape
+        cut_ratio = np.sqrt(1.0 - lam)
+        cut_h = int(H * cut_ratio)
+        cut_w = int(W * cut_ratio)
+        cy = np.random.randint(H)
+        cx = np.random.randint(W)
+        y1 = np.clip(cy - cut_h // 2, 0, H)
+        y2 = np.clip(cy + cut_h // 2, 0, H)
+        x1 = np.clip(cx - cut_w // 2, 0, W)
+        x2 = np.clip(cx + cut_w // 2, 0, W)
+
+        images_mixed = images.clone()
+        images_mixed[:, :, y1:y2, x1:x2] = images[rand_idx, :, y1:y2, x1:x2]
+
+        # Adjust lambda by actual area ratio
+        lam_actual = 1.0 - ((y2 - y1) * (x2 - x1) / (H * W))
+        labels_mixed = lam_actual * labels + (1 - lam_actual) * labels[rand_idx]
+
+        return images_mixed, labels_mixed
+
+
+class MixUp:
+    """MixUp augmentation — interpolates images and labels."""
+
+    def __init__(self, alpha=0.2):
+        self.alpha = alpha
+
+    def __call__(self, images, labels):
+        lam = np.random.beta(self.alpha, self.alpha)
+        rand_idx = torch.randperm(images.size(0), device=images.device)
+        images_mixed = lam * images + (1 - lam) * images[rand_idx]
+        labels_mixed = lam * labels + (1 - lam) * labels[rand_idx]
+        return images_mixed, labels_mixed
+
+
 # ─── TRAINING ────────────────────────────────────────────────────────────────
 
-def train_one_epoch(model, train_loader, loss_fn, optimizer, epoch):
+def train_one_epoch(model, train_loader, loss_fn, optimizer, epoch,
+                     mix_fn=None):
     """Train for one epoch."""
     model.train()
-    
+
     total_loss = 0.0
     total_path_loss = 0.0
     total_anat_loss = 0.0
     all_preds = []
-    all_labels = []
-    
+    all_labels = []  # Store ORIGINAL hard labels for metrics
+
     for batch_idx, (images, labels) in enumerate(train_loader):
         images = images.to(DEVICE)
         labels = labels.to(DEVICE)
-        
+
+        # Keep original hard labels for metric computation
+        original_labels = labels.clone()
+
+        # Apply CutMix / MixUp if enabled
+        if mix_fn is not None:
+            images, labels = mix_fn(images, labels)
+
         # Forward + two-head loss
         loss, path_loss, anat_loss = loss_fn(images, labels, model)
-        
+
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         optimizer.step()
-        
+
         # Track metrics
         bs = images.size(0)
         total_loss += loss.item() * bs
         total_path_loss += path_loss.item() * bs
         total_anat_loss += anat_loss.item() * bs
-        
+
         with torch.no_grad():
             outputs = model(images)
             preds = (outputs > 0.0).float()
             all_preds.append(preds.cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
-        
+            all_labels.append(original_labels.cpu().numpy())  # Use hard labels for metrics
+
         if (batch_idx + 1) % 50 == 0:
             print(f"  Batch {batch_idx+1}/{len(train_loader)} | Loss: {loss.item():.4f} (path: {path_loss.item():.4f} anat: {anat_loss.item():.4f})")
-    
+
     # Calculate epoch metrics
     all_preds = np.concatenate(all_preds, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
     n = len(train_loader.dataset)
-    
+
     avg_loss = total_loss / n
     avg_path = total_path_loss / n
     avg_anat = total_anat_loss / n
     f1 = f1_score(all_labels, all_preds, average="micro", zero_division=0)
     precision = precision_score(all_labels, all_preds, average="micro", zero_division=0)
     recall = recall_score(all_labels, all_preds, average="micro", zero_division=0)
-    
+
     return avg_loss, avg_path, avg_anat, f1, precision, recall
 
 
@@ -374,11 +483,13 @@ def validate(model, val_loader, loss_fn=None, thresholds=None):
                 # Use plain unweighted BCE so val loss tracks clean signal
                 path_loss = nn.functional.binary_cross_entropy_with_logits(
                     outputs[:, :N_PATHOLOGY], labels[:, :N_PATHOLOGY])
-                anat_loss = nn.functional.binary_cross_entropy_with_logits(
-                    outputs[:, N_PATHOLOGY:], labels[:, N_PATHOLOGY:])
                 total_path_loss += path_loss.item() * images.size(0)
-                total_anat_loss += anat_loss.item() * images.size(0)
-                total_loss += (path_loss + anat_loss).item() * images.size(0)
+                total_loss += path_loss.item() * images.size(0)
+                if N_ANATOMY > 0:
+                    anat_loss = nn.functional.binary_cross_entropy_with_logits(
+                        outputs[:, N_PATHOLOGY:], labels[:, N_PATHOLOGY:])
+                    total_anat_loss += anat_loss.item() * images.size(0)
+                    total_loss += anat_loss.item() * images.size(0)
             else:
                 loss = nn.functional.binary_cross_entropy_with_logits(outputs, labels)
                 total_loss += loss.item() * images.size(0)
@@ -431,13 +542,17 @@ def validate(model, val_loader, loss_fn=None, thresholds=None):
         except ValueError:
             result["path_auc"] = 0.0
         # Anatomy-only metrics (columns N_PATHOLOGY..end)
-        a_probs = all_probs[:, N_PATHOLOGY:]
-        a_labels = all_labels[:, N_PATHOLOGY:]
-        a_preds = all_preds[:, N_PATHOLOGY:]
-        result["anat_f1_micro"] = f1_score(a_labels, a_preds, average="micro", zero_division=0)
-        try:
-            result["anat_auc"] = roc_auc_score(a_labels, a_probs, average="micro")
-        except ValueError:
+        if N_ANATOMY > 0:
+            a_probs = all_probs[:, N_PATHOLOGY:]
+            a_labels = all_labels[:, N_PATHOLOGY:]
+            a_preds = all_preds[:, N_PATHOLOGY:]
+            result["anat_f1_micro"] = f1_score(a_labels, a_preds, average="micro", zero_division=0)
+            try:
+                result["anat_auc"] = roc_auc_score(a_labels, a_probs, average="micro")
+            except ValueError:
+                result["anat_auc"] = 0.0
+        else:
+            result["anat_f1_micro"] = 0.0
             result["anat_auc"] = 0.0
 
     return result
@@ -553,6 +668,9 @@ def train(args):
         num_workers=args.num_workers,
         backbone=backbone,
         balanced_sampling=args.balanced_sampling,
+        pseudo_csv=getattr(args, "pseudo_csv", None),
+        pseudo_dir=getattr(args, "pseudo_dir", None),
+        pseudo_weight=getattr(args, "pseudo_weight", 0.5),
     )
 
     # Create model
@@ -616,9 +734,15 @@ def train(args):
         set_backbone_trainable(model, False)
         print(f"\nBackbone frozen for the first {freeze_epochs} epoch(s).")
     
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    # Warmup scheduler: ramp LR linearly for the first few epochs
+    from torch.optim.lr_scheduler import LinearLR, SequentialLR
+    warmup_iters = min(5, args.epochs)
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_iters)
+    reduce_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=3
     )
+    # We'll manage warmup manually in the epoch loop since ReduceLROnPlateau
+    # doesn't compose with SequentialLR easily.
     
     if HAS_TENSORBOARD:
         writer = SummaryWriter(f"runs/densenet121_{time.strftime('%Y%m%d_%H%M%S')}")
@@ -627,7 +751,16 @@ def train(args):
         print("  (TensorBoard not available, skipping logging)")
     
     early_stopping = EarlyStopping(patience=args.patience)
-    
+
+    # Set up CutMix / MixUp augmentation
+    mix_fn = None
+    if hasattr(args, 'cutmix') and args.cutmix:
+        mix_fn = CutMix(alpha=1.0)
+        print("  CutMix augmentation enabled (alpha=1.0)")
+    elif (hasattr(args, 'mixup') and args.mixup) and not (hasattr(args, 'no_mixup') and args.no_mixup):
+        mix_fn = MixUp(alpha=0.2)
+        print("  MixUp augmentation enabled (alpha=0.2)")
+
     # Training loop — report pathology-only F1 as the headline metric
     print(f"\n--- Training for up to {args.epochs} epochs (early stopping patience={args.patience}) ---")
     print(f"{'Ep':>4} | {'TrLoss':>8} {'TrP':>7} {'TrA':>7} | {'VaLoss':>8} {'VaP':>7} {'VaA':>7} | {'PaF1':>6} {'PaAUC':>6} | {'AnF1':>6} {'AnAUC':>6} | {'LR':>10}")
@@ -643,9 +776,13 @@ def train(args):
             backbone_frozen = False
             print(f"  >> Backbone unfrozen at epoch {epoch}")
         
+        # Warmup: ramp up LR linearly for the first few epochs
+        if warmup_scheduler is not None and epoch <= warmup_iters:
+            warmup_scheduler.step()
+
         # Train
         train_loss, train_path_loss, train_anat_loss, train_f1, train_prec, train_rec = train_one_epoch(
-            model, train_loader, loss_fn, optimizer, epoch
+            model, train_loader, loss_fn, optimizer, epoch, mix_fn=mix_fn
         )
         
         # Validate
@@ -659,7 +796,9 @@ def train(args):
         val_path_loss = val_metrics.get("path_loss", 0.0)
         val_anat_loss = val_metrics.get("anat_loss", 0.0)
         
-        scheduler.step(val_path_f1)
+        # Only start reducing LR after warmup is done
+        if epoch > warmup_iters:
+            reduce_scheduler.step(val_path_f1)
         current_lr = optimizer.param_groups[-1]["lr"]
         
         elapsed = time.time() - start_time
@@ -737,16 +876,17 @@ def train(args):
         thresholds[:N_PATHOLOGY],
         PATHOLOGY_LABELS, "Validation (Pathology)"
     )
-    
-    print("\n" + "=" * 60)
-    print("RESULTS — Anatomy Head (auxiliary, not used downstream)")
-    print("=" * 60)
-    print_per_class_metrics(
-        val_metrics["probs"][:, N_PATHOLOGY:],
-        val_metrics["labels"][:, N_PATHOLOGY:],
-        thresholds[N_PATHOLOGY:],
-        ANATOMY_LABELS, "Validation (Anatomy)"
-    )
+
+    if N_ANATOMY > 0:
+        print("\n" + "=" * 60)
+        print("RESULTS — Anatomy Head (auxiliary, not used downstream)")
+        print("=" * 60)
+        print_per_class_metrics(
+            val_metrics["probs"][:, N_PATHOLOGY:],
+            val_metrics["labels"][:, N_PATHOLOGY:],
+            thresholds[N_PATHOLOGY:],
+            ANATOMY_LABELS, "Validation (Anatomy)"
+        )
 
     # Final test evaluation
     print("\n" + "=" * 60)
@@ -760,10 +900,11 @@ def train(args):
     print(f"  Pathology AUC:        {test_metrics.get('path_auc', test_metrics['auc']):.4f}")
     print(f"  Total Loss:           {test_metrics['loss']:.4f}")
     print(f"  Pathology Loss:       {test_metrics.get('path_loss', 0):.4f}")
-    print(f"  Anatomy Loss:         {test_metrics.get('anat_loss', 0):.4f}")
-    print(f"\n--- Auxiliary Metrics (Anatomy — not used downstream) ---")
-    print(f"  Anatomy F1 (micro):   {test_metrics.get('anat_f1_micro', 0):.4f}")
-    print(f"  Anatomy AUC:          {test_metrics.get('anat_auc', 0):.4f}")
+    if N_ANATOMY > 0:
+        print(f"  Anatomy Loss:         {test_metrics.get('anat_loss', 0):.4f}")
+        print(f"\n--- Auxiliary Metrics (Anatomy — not used downstream) ---")
+        print(f"  Anatomy F1 (micro):   {test_metrics.get('anat_f1_micro', 0):.4f}")
+        print(f"  Anatomy AUC:          {test_metrics.get('anat_auc', 0):.4f}")
 
     print_per_class_metrics(
         test_metrics["probs"][:, :N_PATHOLOGY],
@@ -771,12 +912,13 @@ def train(args):
         thresholds[:N_PATHOLOGY],
         PATHOLOGY_LABELS, "Test (Pathology)"
     )
-    print_per_class_metrics(
-        test_metrics["probs"][:, N_PATHOLOGY:],
-        test_metrics["labels"][:, N_PATHOLOGY:],
-        thresholds[N_PATHOLOGY:],
-        ANATOMY_LABELS, "Test (Anatomy)"
-    )
+    if N_ANATOMY > 0:
+        print_per_class_metrics(
+            test_metrics["probs"][:, N_PATHOLOGY:],
+            test_metrics["labels"][:, N_PATHOLOGY:],
+            thresholds[N_PATHOLOGY:],
+            ANATOMY_LABELS, "Test (Anatomy)"
+        )
 
     print(f"\nBest model saved to: {best_path}")
     print(f"  Includes: tuned thresholds, label names, head metadata")
@@ -797,11 +939,23 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=DEFAULT_WEIGHT_DECAY)
     parser.add_argument("--patience", type=int, default=DEFAULT_PATIENCE)
     parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--pseudo_csv", type=str, default=None,
+                        help="Path to a pseudo-label manifest from "
+                             "src/pseudo/generate_pseudo_labels.py (e.g. data/pseudo_labels.csv). "
+                             "Pseudo-labeled REAL pool images are added to the TRAIN split only; "
+                             "val/test stay real-only.")
+    parser.add_argument("--pseudo_dir", type=str, default=None,
+                        help="Folder the pseudo manifest's filenames are relative to "
+                             "(default: data/pseudo_pool)")
+    parser.add_argument("--pseudo_weight", type=float, default=0.5,
+                        help="Relative training weight of pseudo-labeled vs real rows "
+                             "(real=1.0; default pseudo=0.5 hedges against label noise)")
     parser.add_argument("--max_pos_weight", type=float, default=DEFAULT_MAX_POS_WEIGHT)
     parser.add_argument("--freeze_epochs", type=int, default=DEFAULT_FREEZE_EPOCHS,
                         help="Epochs to keep backbone frozen (0 to disable)")
     parser.add_argument("--backbone", type=str, default="imagenet",
-                        choices=["imagenet", "xrv"])
+                        choices=["imagenet", "xrv", "resnet50"],
+                        help="Backbone architecture: imagenet (DenseNet121), xrv (XRV DenseNet), resnet50")
     parser.add_argument("--xrv_checkpoint", type=str, default="densenet121-res224-chex")
     parser.add_argument("--save_prefix", type=str, default="")
     parser.add_argument("--anatomy_loss_weight", type=float, default=0.3,
@@ -816,6 +970,12 @@ if __name__ == "__main__":
                         help="Focal loss gamma (focusing parameter, higher=more focus on hard examples)")
     parser.add_argument("--label_smoothing", type=float, default=DEFAULT_LABEL_SMOOTHING,
                         help="Label smoothing factor (0.0=disabled, 0.05=recommended)")
+    parser.add_argument("--cutmix", action="store_true",
+                        help="Enable CutMix augmentation during training")
+    parser.add_argument("--mixup", action="store_true", default=True,
+                        help="Enable MixUp augmentation during training (default: True)")
+    parser.add_argument("--no_mixup", action="store_true",
+                        help="Disable MixUp augmentation")
 
     args = parser.parse_args()
     train(args)
