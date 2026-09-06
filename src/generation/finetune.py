@@ -31,7 +31,7 @@ DATASET_CSV = "data/train_finetune.csv"   # CSV with columns: uid, image_path, r
 OUTPUT_DIR = "checkpoints/qwen_finetune"
 BATCH_SIZE = 1               # Per‑GPU batch size (1 for 4‑bit + LoRA)
 GRAD_ACCUM_STEPS = 8         # Effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS
-EPOCHS = 5
+EPOCHS = 2
 LEARNING_RATE = 1e-4
 SEED = 42
 
