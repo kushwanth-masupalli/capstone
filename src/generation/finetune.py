@@ -43,7 +43,7 @@ def main() -> None:
     processor = AutoProcessor.from_pretrained(MODEL_NAME)
     model = AutoModelForVision2Seq.from_pretrained(
         MODEL_NAME,
-        load_in_4bit=True,
+        load_in_8bit=True,
         device_map="auto",
         torch_dtype=torch.float16,
     )
