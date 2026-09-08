@@ -1,0 +1,80 @@
+# Pseudo-Labeling Branch — NIH Pool Expansion Experiment
+
+**Status: stopped (2026-09-05).** This branch tried to improve the chest X-ray
+classifier by adding **real, unlabeled NIH X-ray images** to the training set,
+auto-labeled by our own classifier (the "teacher"). The idea was sound, but the
+experiment was **never completed**: the NIH dataset download never finished, so
+there was never enough data to run the pipeline.
+
+The classifier here is the working 7-pathology IU baseline (DenseNet121,
+AUC 0.8024 on the real test split) plus the pseudo-label expansion code.
+
+---
+
+## What each file does
+
+| File | Purpose |
+|---|---|
+| `train.py` | Trains the DenseNet121 classifier. Has a `--pseudo_csv` flag that adds pseudo-labeled images to the **train split only**. |
+| `dataset.py` | Loads the IU dataset, encodes the 7 pathology labels, does the patient-level split, and contains the pseudo-label dataset + sampler (pseudo rows are drawn at 0.5× the weight of real rows). |
+| `preprocess.py` | Shared CLAHE → 224×224 RGB preprocessing. Used for both IU images and the NIH pool. |
+| `src/pseudo/prepare_pool.py` | Phase 1 — turns raw NIH ChestX-ray14 images into a cleaned image pool (`data/pseudo_pool/`). |
+| `src/pseudo/generate_pseudo_labels.py` | Phase 3 — runs the teacher over the pool and keeps a label **only if confidence ≥ 0.85**, writes `data/pseudo_labels.csv` + contact sheets for visual checking. |
+| `src/pseudo/evaluate_checkpoint.py` | Phase 2/5 — evaluates any checkpoint on the **real IU split** (AUC, F1, per-class metrics). |
+| `app.py` | Flask demo UI with Grad-CAM heatmaps for the base classifier. |
+| `src/explainability/gradcam.py` | Grad-CAM implementation used by the demo UI. |
+| `scripts/sanity_check_xrv.py` | Sanity check for the torchxrayvision backbone. |
+| `data/indiana_reports.csv` | IU dataset: radiologist reports + MeSH labels. |
+| `data/indiana_projections.csv` | IU dataset: image filename → view (frontal/lateral) mapping. |
+| `ANATOMY_LABEL_REMOVAL.txt` | Note explaining why anatomy labels were removed from the classifier (unrelated to this experiment). |
+| `requirements.txt` | Python dependencies. |
+| `.gitignore` | Files excluded from git (models, images, pool data). |
+
+---
+
+## The idea (in simple terms)
+
+The IU dataset is small (~2.6k images) and class-imbalanced, which limits the
+classifier. NIH ChestX-ray14 is a huge public chest X-ray dataset (**~112k
+images, ~42 GB**) — but it has no per-image pathology labels that match ours.
+
+**Plan:** treat NIH images as unlabeled data and let our own IU-trained model
+(the "teacher") label them. Keep a label only when the teacher is very sure
+(confidence ≥ 0.85), so wrong labels don't poison training. Then retrain the
+classifier on real IU data + pseudo-labeled NIH data, and check if it beats
+the teacher's baseline (AUC 0.8024).
+
+**The pipeline:**
+
+1. **Prepare pool** (`prepare_pool.py`) — preprocess 15–20k real NIH frontal
+   images with the same pipeline as IU.
+2. **Teacher baseline** (`evaluate_checkpoint.py`) — record the teacher's
+   numbers on the real IU split (AUC 0.8024, F1 0.3548).
+3. **Generate pseudo-labels** (`generate_pseudo_labels.py`) — teacher predicts
+   on every pool image; keep only confident labels (≥0.85).
+4. **Retrain** (`train.py --pseudo_csv`) — train on real IU + pseudo-labeled
+   NIH rows, with pseudo rows weighted at 0.5× so label noise can't dominate.
+5. **Judge** (`evaluate_checkpoint.py`) — measure on the untouched real IU
+   test split. Bar was AUC ≥ 0.8224 and F1 not below 0.3548.
+
+**Safety rule:** val/test always stay 100% real, radiologist-labeled IU
+images. Pseudo-labels can only ever enter the training split.
+
+---
+
+## Why we stopped
+
+1. **The data was the bottleneck.** NIH ChestX-ray14 is ~42 GB of archives.
+   The download never completed, and the partial source was removed.
+2. **The pool stalled at 208 images** out of the 15–20k target — two orders of
+   magnitude short.
+3. **Everything downstream depends on the pool**: no pool → no teacher
+   inference → no pseudo-labels → no retrained model. So no result was ever
+   produced to compare against the 0.8024 baseline.
+4. Even with a full pool, the approach carried known risks: the teacher can
+   reinforce its own mistakes (confirmation bias), and NIH ↔ IU domain shift
+   (different equipment/population) could hurt the subtle IU findings.
+
+**Verdict:** the methodology is sound and the code is complete in `src/pseudo/`,
+but the experiment was stopped because its data prerequisite (a full NIH
+download) was not met. The real-only IU baseline remains the model of record.
