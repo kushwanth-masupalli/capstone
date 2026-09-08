@@ -117,6 +117,7 @@ watchfiles==1.2.0
 websocket-client==1.9.1
 websockets==16.1.1
 Werkzeug==3.1.8
+streamlit==1.38.0
 yarl==1.24.5
 torchxrayvision
 peft

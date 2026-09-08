@@ -14,7 +14,17 @@ chest X-rays:
 - **Class imbalance:** balanced sampling + focal loss by default.
 - **Demo:** `app.py` runs a Flask UI with per-label Grad-CAM heatmaps.
 
-## Reference results (real-only 7-pathology test split, 2026-09-03)
+## Report Generation Results
+
+| Metric | Value |
+|---|---|
+| BLEU‑1 | 0.2108 |
+| ROUGE‑L | 0.2803 |
+| METEOR | (to be computed) |
+| CIDEr | (to be computed) |
+
+*The numbers above correspond to the held‑out patient split (no leakage). METEOR and CIDEr will be filled in once the evaluation script runs successfully.*
+
 
 | Metric | Value |
 |---|---|
@@ -24,6 +34,56 @@ chest X-rays:
 Model of record: `checkpoints/base_best_model.pth`.
 
 ## Quick start
+
+**Classifier (DenseNet‑121)**
+
+```bash
+# Train the 7‑pathology classifier (baseline)
+./venv/Scripts/python.exe train.py --backbone xrv --epochs 80 \
+    --balanced_sampling --focal_loss --save_prefix base_
+
+# Launch the Grad‑CAM Flask demo for the classifier
+./venv/Scripts/python.exe app.py
+```
+
+**Report Generation (Qwen‑2‑VL‑2B LoRA)**
+
+```bash
+# 1️⃣ Create patient‑level CSV splits (if not already present)
+python src/generation/create_finetune_csv.py
+
+# 2️⃣ Fine‑tune the Qwen model (LoRA, 4‑bit)
+python src/generation/finetune.py
+
+# 3️⃣ Generate reports on the held‑out test split
+python src/generation/generate_reports.py \
+    --split data/report_splits/test.csv \
+    --output results/finetuned_patient_split/pipeline_results.json
+
+# 4️⃣ Evaluate (BLEU‑1, ROUGE‑L, METEOR, CIDEr)
+python src/generation/evaluate_metrics.py \
+    results/finetuned_patient_split/pipeline_results.json \
+    data/report_splits/test.csv \
+    --output results/finetuned_patient_split/evaluation.json
+
+# 5️⃣ Create a blinded review set (e.g., 25 samples)
+python src/generation/create_review_set.py \
+    --generated results/finetuned_patient_split/pipeline_results.json \
+    --split data/report_splits/test.csv \
+    --output results/finetuned_patient_split/review_set.csv \
+    --sample 25
+```
+
+**Demo UI (Streamlit)**
+
+```bash
+streamlit run demo/app.py
+```
+
+The Streamlit app lets you upload an X‑ray, runs the inference wrapper, and displays the generated report.
+
+---
+
 
 ```bash
 # Train (real-only baseline)
@@ -57,3 +117,14 @@ preprocess.py        CLAHE -> 224x224 -> RGB preprocessing pipeline
 src/explainability/  Grad-CAM implementation
 scripts/             Sanity checks
 ```
+
+## Limitations & Future Work
+
+- **Classifier**: the 7‑pathology DenseNet‑121 model is present in the `renkario` branch but its source files are not tracked in this repo yet. Add `train.py`, `app.py`, `dataset.py`, etc. to make the classifier runnable.
+- **Grad‑CAM**: placeholder in the inference wrapper; proper heat‑map generation still needs to be hooked up.
+- **Hallucination detection**: not implemented – future work will compare classifier predictions with report mentions.
+- **METEOR / CIDEr**: evaluation metrics depend on `pycocoevalcap`; once the package is installed they will be populated.
+- **Patient history**: synthetic history and contradiction tests are planned but not yet integrated.
+- **Demo**: the Streamlit UI currently shows only the generated report; expanding it to display Grad‑CAM overlays and hallucination flags is a next milestone.
+
+These items outline the remaining steps to turn the prototype into a complete, reproducible capstone project.
