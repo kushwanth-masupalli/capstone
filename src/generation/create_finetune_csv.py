@@ -1,50 +1,67 @@
 #!/usr/bin/env python3
-"""
-Generate training CSV for LoRA finetuning (Plan B).
+"""Create reproducible patient-level splits for report-generation training.
 
-- Joins ``indiana_reports.csv`` and ``indiana_projections.csv`` on ``uid``.
-- Keeps only frontal views (``projection == "Frontal"``).
-- Produces three columns required by ``finetune.py``:
-    * ``uid`` – optional identifier (kept for bookkeeping).
-    * ``image_path`` – absolute or relative path to the **pre‑processed** PNG (``data/images/preprocessed/<filename>``).
-    * ``report_text`` – the ground‑truth ``findings`` text that the model should learn to generate.
-
-The resulting CSV is saved as ``data/train_finetune.csv`` and can be fed directly to the finetuning script.
+The generated files are data/report_splits/train.csv,
+data/report_splits/validation.csv, and data/report_splits/test.csv.  No
+patient (uid) occurs in more than one split.
 """
 
-import os
+from pathlib import Path
+
 import pandas as pd
+from sklearn.model_selection import train_test_split
+
+
+RANDOM_STATE = 42
+TEST_SIZE = 0.15
+VALIDATION_SIZE = 0.15
+DATA_DIR = Path("data")
+SPLIT_DIR = DATA_DIR / "report_splits"
+
 
 def main() -> None:
-    reports_path = "data/indiana_reports.csv"
-    projections_path = "data/indiana_projections.csv"
-    out_path = "data/train_finetune.csv"
-    preproc_dir = "data/images/preprocessed"
+    reports = pd.read_csv(DATA_DIR / "indiana_reports.csv")
+    projections = pd.read_csv(DATA_DIR / "indiana_projections.csv")
 
-    # Load CSVs
-    reports = pd.read_csv(reports_path)
-    projections = pd.read_csv(projections_path)
-
-    # Keep only frontal images
-    frontal = projections[projections["projection"] == "Frontal"].copy()
-
-    # Merge to get the findings column (ground‑truth report text)
-    merged = frontal.merge(reports[["uid", "findings"]], on="uid", how="left")
-
-    # Build full image path to the pre‑processed image
-    merged["image_path"] = merged["filename"].apply(lambda fn: os.path.join(preproc_dir, fn))
-
-    # Rename column to match finetune.py expectations
+    frontal = projections.loc[projections["projection"] == "Frontal"].copy()
+    merged = frontal.merge(reports[["uid", "findings"]], on="uid", how="inner")
     merged = merged.rename(columns={"findings": "report_text"})
+    merged["report_text"] = merged["report_text"].fillna("").astype(str).str.strip()
+    merged["image_path"] = merged["filename"].map(
+        lambda filename: str(DATA_DIR / "images" / "preprocessed" / filename)
+    )
+    merged["sample_id"] = merged["filename"].astype(str)
 
-    # Keep only the columns we need
-    finetune_csv = merged[["uid", "image_path", "report_text"]].copy()
+    usable = merged.loc[merged["report_text"].ne("")].copy()
+    usable = usable.loc[usable["image_path"].map(lambda path: Path(path).is_file())]
+    usable = usable[["sample_id", "uid", "image_path", "report_text"]].reset_index(drop=True)
 
-    # Drop any rows with missing report text (should be rare)
-    finetune_csv = finetune_csv.dropna(subset=["report_text"]).reset_index(drop=True)
+    uids = usable["uid"].drop_duplicates().to_numpy()
+    train_validation_uids, test_uids = train_test_split(
+        uids, test_size=TEST_SIZE, random_state=RANDOM_STATE
+    )
+    train_uids, validation_uids = train_test_split(
+        train_validation_uids,
+        test_size=VALIDATION_SIZE / (1 - TEST_SIZE),
+        random_state=RANDOM_STATE,
+    )
+    split_uids = {
+        "train": set(train_uids),
+        "validation": set(validation_uids),
+        "test": set(test_uids),
+    }
+    assert split_uids["train"].isdisjoint(split_uids["validation"])
+    assert split_uids["train"].isdisjoint(split_uids["test"])
+    assert split_uids["validation"].isdisjoint(split_uids["test"])
 
-    finetune_csv.to_csv(out_path, index=False)
-    print(f"✅ Generated {len(finetune_csv)} training rows → {out_path}")
+    SPLIT_DIR.mkdir(parents=True, exist_ok=True)
+    for name, ids in split_uids.items():
+        split = usable.loc[usable["uid"].isin(ids)].reset_index(drop=True)
+        split.to_csv(SPLIT_DIR / f"{name}.csv", index=False)
+        print(f"{name:10s}: {len(split):4d} images / {split['uid'].nunique():4d} patients")
+
+    print(f"Saved patient-level report splits to {SPLIT_DIR}")
+
 
 if __name__ == "__main__":
     main()

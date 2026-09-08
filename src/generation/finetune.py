@@ -19,7 +19,14 @@ logic (paths, column names) to match your environment.
 
 import os
 import torch
-from transformers import AutoProcessor, AutoModelForVision2Seq, TrainingArguments, Trainer
+from PIL import Image
+from transformers import (
+    AutoProcessor,
+    AutoModelForVision2Seq,
+    BitsAndBytesConfig,
+    TrainingArguments,
+    Trainer,
+)
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
 
@@ -27,8 +34,9 @@ from datasets import load_dataset
 # Configuration (adjust as needed)
 # ---------------------------------------------------------------------------
 MODEL_NAME = "Qwen/Qwen2-VL-2B-Instruct"  # HuggingFace repo name
-DATASET_CSV = "data/train_finetune.csv"   # CSV with columns: uid, image_path, report_text
-OUTPUT_DIR = "checkpoints/qwen_finetune"
+TRAIN_CSV = "data/report_splits/train.csv"
+VALIDATION_CSV = "data/report_splits/validation.csv"
+OUTPUT_DIR = "checkpoints/qwen_finetune_patient_split"
 BATCH_SIZE = 1               # Per‑GPU batch size (1 for 4‑bit + LoRA)
 GRAD_ACCUM_STEPS = 8         # Effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS
 EPOCHS = 2
@@ -36,16 +44,27 @@ LEARNING_RATE = 1e-4
 SEED = 42
 
 def main() -> None:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA GPU is required for Qwen2-VL fine-tuning, but none was detected.")
     torch.cuda.empty_cache()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Training on GPU: {torch.cuda.get_device_name(0)}")
 
     # -------------------- Load processor & model (4‑bit) --------------------
     processor = AutoProcessor.from_pretrained(MODEL_NAME)
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.float16,
+    )
     model = AutoModelForVision2Seq.from_pretrained(
         MODEL_NAME,
-        load_in_8bit=True,
-        device_map="auto",
+        quantization_config=quantization_config,
+        # Force the trainable model onto the RTX 4050 instead of allowing
+        # automatic CPU offloading, which makes the first batch appear stuck.
+        device_map={"": 0},
         torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
     )
 
     # -------------------- Prepare LoRA -----------------------------------
@@ -68,39 +87,91 @@ def main() -> None:
     model = get_peft_model(model, lora_cfg)
 
     # -------------------- Dataset ---------------------------------------
-    # Expected CSV columns: uid, image_path, report_text
-    dataset = load_dataset("csv", data_files=DATASET_CSV)
+    # Keep raw paths/text in the dataset. Vision-language samples must be
+    # processed at batch time, because image sizes and token lengths vary.
+    datasets = load_dataset(
+        "csv", data_files={"train": TRAIN_CSV, "validation": VALIDATION_CSV}
+    )
+    train_dataset = datasets["train"]
+    validation_dataset = datasets["validation"]
 
-    def _preprocess(example):
-        # ``processor`` expects a Pillow image; we provide the path and let it load.
-        image_path = example["image_path"]
-        report = example["report_text"]
-        inputs = processor(images=image_path, text=report, return_tensors="pt")
-        return {
-            "pixel_values": inputs["pixel_values"].squeeze(0),
-            "labels": inputs["input_ids"].squeeze(0),
-        }
+    class ReportCollator:
+        """Build one Qwen2-VL supervised training batch (BATCH_SIZE is one)."""
 
-    tokenized = dataset.map(_preprocess, remove_columns=dataset.column_names)
+        def __call__(self, features):
+            if len(features) != 1:
+                raise ValueError("This collator supports BATCH_SIZE=1 only.")
+
+            feature = features[0]
+            image_path = feature["image_path"]
+            report = str(feature["report_text"]).strip()
+            if not report:
+                raise ValueError(f"Empty report text for {image_path}")
+
+            with Image.open(image_path) as raw_image:
+                image = raw_image.convert("RGB")
+
+            user_messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": "Write a chest X-ray report with Findings and Impression."},
+                ],
+            }]
+            prompt_text = processor.apply_chat_template(
+                user_messages, tokenize=False, add_generation_prompt=True
+            )
+            eos_token = processor.tokenizer.eos_token or ""
+            full_text = f"{prompt_text}{report}{eos_token}"
+
+            # Encode both versions with the same image.  Their length difference
+            # lets us exclude instruction/image tokens from the language-model loss.
+            prompt_inputs = processor(
+                text=[prompt_text], images=[image], padding=True, return_tensors="pt"
+            )
+            inputs = processor(
+                text=[full_text], images=[image], padding=True, return_tensors="pt"
+            )
+            labels = inputs["input_ids"].clone()
+            labels[labels == processor.tokenizer.pad_token_id] = -100
+            labels[:, :prompt_inputs["input_ids"].shape[1]] = -100
+            inputs["labels"] = labels
+            return inputs
+
+    data_collator = ReportCollator()
 
     # -------------------- Training arguments ---------------------------
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=BATCH_SIZE,
+        per_device_eval_batch_size=BATCH_SIZE,
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
         num_train_epochs=EPOCHS,
         learning_rate=LEARNING_RATE,
         fp16=True,
         logging_steps=10,
-        save_steps=0,  # checkpointing handled manually if desired
-        evaluation_strategy="no",
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=1,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        # PeftModel hides the base model signature; explicitly identify the
+        # supervised loss tensor so Trainer reports eval_loss during validation.
+        label_names=["labels"],
+        remove_unused_columns=False,
+        # Avoid importing TensorBoard.  The local TensorFlow/TensorBoard pair is
+        # incompatible, and logging is not required for this training run.
+        report_to="none",
         seed=SEED,
     )
 
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized["train"] if "train" in tokenized else tokenized["default"],
+        train_dataset=train_dataset,
+        eval_dataset=validation_dataset,
+        data_collator=data_collator,
     )
 
     trainer.train()
