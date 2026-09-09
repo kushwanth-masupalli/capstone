@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 from peft import PeftModel
 
 
@@ -25,7 +25,7 @@ def load_model_and_processor():
         trust_remote_code=True
     )
 
-    base_model = AutoModelForVision2Seq.from_pretrained(
+    base_model = Qwen2VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen2-VL-2B-Instruct",
         device_map={"": 0},
         torch_dtype=torch.float16,
@@ -156,31 +156,19 @@ def main():
         )
 
     # ---------------------------------------------------------
-    # Load model
+    # Run pipeline (reuse cached model if possible)
     # ---------------------------------------------------------
 
-    processor, model = load_model_and_processor()
+    generated = run_report(str(image_path))
 
     # ---------------------------------------------------------
-    # Generate
-    # ---------------------------------------------------------
-
-    generated = generate_report(
-        processor,
-        model,
-        image_path
-    )
-
-    # ---------------------------------------------------------
-    # Build result
+    # Build result – minimal fields for the demo UI
     # ---------------------------------------------------------
 
     result = {
         "image_path": str(image_path.resolve()),
-        "predicted_findings": [],
         "generated_report": generated,
-        "gradcam_path": None,
-        "hallucination_flags": [],
+        # The UI can fill the remaining fields if desired.
     }
 
     # ---------------------------------------------------------
@@ -188,22 +176,37 @@ def main():
     # ---------------------------------------------------------
 
     out_path = Path(args.output)
-
-    out_path.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        json.dumps(
-            result,
-            indent=2,
-            ensure_ascii=False
-        ),
-        encoding="utf-8"
+        json.dumps(result, indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
-
     print(f"Result written to {out_path}")
+
+
+def _load_cached():
+    """Load processor and model once per process and cache them globally.
+
+    The function returns a tuple (processor, model). Subsequent calls reuse the
+    same objects, which speeds up repeated UI invocations.
+    """
+    global _cached_processor, _cached_model
+    if _cached_processor is None or _cached_model is None:
+        _cached_processor, _cached_model = load_model_and_processor()
+    return _cached_processor, _cached_model
+
+# Global cache placeholders
+_cached_processor = None
+_cached_model = None
+
+def run_report(image_path: str) -> str:
+    """Generate a report for ``image_path`` using the fine‑tuned LoRA model.
+
+    This helper is used by the Streamlit UI to avoid the overhead of a subprocess
+    call. It returns only the generated report string.
+    """
+    processor, model = _load_cached()
+    return generate_report(processor, model, Path(image_path))
 
 
 if __name__ == "__main__":

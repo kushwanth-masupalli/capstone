@@ -1,0 +1,31 @@
+**Execution Summary**
+
+**What we have done**
+1. Added a full‑featured Streamlit UI (`demo/app.py`) that:
+   - Uploads an X‑ray image.
+   - Runs a findings classifier (TorchXRayVision DenseNet) and displays probabilities.
+   - Generates Grad‑CAM visualizations for the top predictions.
+   - Generates a radiology report using the fine‑tuned Qwen‑2‑VL LoRA model.
+   - Performs hallucination detection by extracting findings from the report and comparing them to classifier predictions.
+2. Implemented supporting modules:
+   - `src/classifier/predict.py` – loads the classifier, preprocesses images, and returns label probabilities.
+   - `src/explainability/gradcam.py` – creates Grad‑CAM heatmaps for a given class.
+   - `src/hallucination/check.py` – extracts findings via keyword matching and flags unsupported findings.
+   - Updated `src/inference/pipeline.py` to cache the model and expose a `run_report(image_path)` helper for direct calls from the UI.
+3. Added a sanity‑check script (`scripts/demo_test.py`) that runs the entire pipeline on a sample image and prints classifier results, a Grad‑CAM image path, the generated report, and any hallucination flags.
+
+**What is ready**
+- The Streamlit demo can be started with `streamlit run demo/app.py` and will execute the full end‑to‑end pipeline without needing subprocess calls.
+- The cached model loading ensures the UI is responsive after the first inference.
+- Grad‑CAM overlay images are generated on‑the‑fly and displayed.
+- Hallucination detection messages appear in the UI when applicable.
+- The `demo_test.py` script can be used to verify the pipeline in a terminal or CI environment.
+
+**How we did it**
+- Created helper functions for each pipeline stage (classifier, Grad‑CAM, report generation, hallucination check).
+- Modified the inference script to provide a reusable `run_report` function and global cache (`_load_cached`).
+- Updated the Streamlit app to import these helpers, manage temporary files, and present results in a clear layout (sidebar for upload, main area for predictions, visualizations, report, and flags).
+- Added proper path handling so the `src` package is importable from the demo and scripts.
+- Implemented a concise sanity‑check script that ties all components together for quick validation.
+
+You can now run the UI or the demo script to see the complete pipeline in action.
