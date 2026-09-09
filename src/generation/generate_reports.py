@@ -30,7 +30,7 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 from peft import PeftModel
 
 CHECKPOINT_DIR = Path("checkpoints/qwen_finetune_patient_split")
@@ -38,7 +38,7 @@ CHECKPOINT_DIR = Path("checkpoints/qwen_finetune_patient_split")
 def load_model_and_processor():
     """Load the base Qwen‑2‑VL‑2B model, attach the LoRA adapter, and return the processor."""
     processor = AutoProcessor.from_pretrained(CHECKPOINT_DIR, trust_remote_code=True)
-    base_model = AutoModelForVision2Seq.from_pretrained(
+    base_model = Qwen2VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen2-VL-2B-Instruct",
         device_map={"": 0},
         torch_dtype=torch.float16,
@@ -94,7 +94,10 @@ def main():
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+    out_path.write_text(
+    json.dumps(results, indent=2, ensure_ascii=False),
+    encoding="utf-8"
+)
     print(f"All done – results saved to {out_path}")
 
 if __name__ == "__main__":
