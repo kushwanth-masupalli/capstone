@@ -1,0 +1,7 @@
+{
+  "image_path": "C:\\Users\\masup\\OneDrive\\Desktop\\capstone\\data\\images\\1000_IM-0003-1001.dcm.png",
+  "predicted_findings": [],
+  "generated_report": "system\nYou are a helpful assistant.\nuser\nWrite a chest X-ray report with Findings and Impression.\nassistant\nThe heart is normal in size. The mediastinum is unremarkable. The lungs are clear.",
+  "gradcam_path": null,
+  "hallucination_flags": []
+}

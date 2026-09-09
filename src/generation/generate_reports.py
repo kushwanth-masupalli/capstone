@@ -94,7 +94,10 @@ def main():
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+    out_path.write_text(
+    json.dumps(results, indent=2, ensure_ascii=False),
+    encoding="utf-8"
+)
     print(f"All done – results saved to {out_path}")
 
 if __name__ == "__main__":

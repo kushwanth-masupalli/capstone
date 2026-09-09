@@ -22,12 +22,14 @@ import torch
 from PIL import Image
 from transformers import (
     AutoProcessor,
-    AutoModelForVision2Seq,
+    Qwen2VLForConditionalGeneration,
     BitsAndBytesConfig,
     TrainingArguments,
     Trainer,
 )
+# pyrefly: ignore [missing-import]
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+# pyrefly: ignore [missing-import]
 from datasets import load_dataset
 
 # ---------------------------------------------------------------------------
@@ -57,7 +59,7 @@ def main() -> None:
         bnb_4bit_use_double_quant=True,
         bnb_4bit_compute_dtype=torch.float16,
     )
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
         MODEL_NAME,
         quantization_config=quantization_config,
         # Force the trainable model onto the RTX 4050 instead of allowing
