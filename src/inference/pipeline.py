@@ -68,7 +68,7 @@ def generate_report(processor, model, image_path: Path) -> str:
                 },
                 {
                     "type": "text",
-                    "text": "Write a chest X-ray report with Findings and Impression."
+                    "text": "Write a chest X-ray report with Findings"
                 },
             ],
         }
