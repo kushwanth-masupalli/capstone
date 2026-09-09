@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Model weights
 *.pt
 *.pth
@@ -8,10 +9,22 @@
 data/
 *.csv
 !data/.gitkeep
+=======
+# Large model files
+*.pt
+*.pth
+*.onnx
+*.h5
+
+# Dataset images (too large for git)
+data/images/*.png
+data/images/preprocessed/
+>>>>>>> 1a48c73 (pre processing done)
 
 # Python
 __pycache__/
 *.pyc
+<<<<<<< HEAD
 venv/
 .venv/
 *.egg-info/
@@ -26,11 +39,30 @@ checkpoints/
 
 # Jupyter
 .ipynb_checkpoints/
+=======
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+>>>>>>> 1a48c73 (pre processing done)
 
 # OS
 .DS_Store
 Thumbs.db
 
+<<<<<<< HEAD
 # Vector DB local storage
 *.faiss
 chroma_db/
@@ -38,3 +70,9 @@ chroma_db/
 # Logs
 *.log
 logs/
+=======
+# Logs
+*.log
+wandb/
+runs/
+>>>>>>> 1a48c73 (pre processing done)
