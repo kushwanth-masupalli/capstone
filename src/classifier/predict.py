@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-def load_classifier(weights: str = "xrv_v2_last_model.pth"):
+def load_classifier(weights: str = "densenet121-res224-all"):
     """Load a TorchXRayVision DenseNet classifier.
 
     Parameters
