@@ -30,15 +30,16 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 from peft import PeftModel
 
 CHECKPOINT_DIR = Path("checkpoints/qwen_finetune_patient_split")
 
+
 def load_model_and_processor():
     """Load the base Qwen‑2‑VL‑2B model, attach the LoRA adapter, and return the processor."""
     processor = AutoProcessor.from_pretrained(CHECKPOINT_DIR, trust_remote_code=True)
-    base_model = AutoModelForVision2Seq.from_pretrained(
+    base_model = Qwen2VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen2-VL-2B-Instruct",
         device_map={"": 0},
         torch_dtype=torch.float16,
@@ -48,6 +49,7 @@ def load_model_and_processor():
     model = PeftModel.from_pretrained(base_model, CHECKPOINT_DIR)
     model.eval()
     return processor, model
+
 
 def generate_one(processor, model, image_path: Path) -> str:
     image = Image.open(image_path).convert("RGB")
@@ -60,9 +62,24 @@ def generate_one(processor, model, image_path: Path) -> str:
     }]
     prompt = processor.apply_chat_template(user_msg, tokenize=False, add_generation_prompt=True)
     inputs = processor(text=prompt, images=image, return_tensors="pt").to(model.device)
-    generated_ids = model.generate(**inputs, max_new_tokens=512, do_sample=False)
-    generated_text = processor.decode(generated_ids[0], skip_special_tokens=True)
+
+    # Only the NEWLY generated tokens should be decoded — generated_ids initially
+    # contains the full sequence (prompt + generation). Decoding the whole thing
+    # leaks chat-template boilerplate into the "report" text and corrupts every
+    # downstream metric (BLEU/ROUGE/METEOR/CIDEr).
+    input_len = inputs["input_ids"].shape[1]
+    generated_ids = model.generate(
+        **inputs,
+        max_new_tokens=200,          # reports in this dataset are short; 512 let the
+                                      # model ramble/loop far past where a real report ends
+        do_sample=False,
+        repetition_penalty=1.3,      # discourages the "not displaced. not displaced. ..." loops
+        no_repeat_ngram_size=3,
+    )
+    generated_ids_trimmed = generated_ids[:, input_len:]
+    generated_text = processor.decode(generated_ids_trimmed[0], skip_special_tokens=True)
     return generated_text.strip()
+
 
 def main():
     parser = argparse.ArgumentParser(description="Generate reports for a CSV split.")
@@ -95,10 +112,11 @@ def main():
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-    json.dumps(results, indent=2, ensure_ascii=False),
-    encoding="utf-8"
-)
+        json.dumps(results, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
     print(f"All done – results saved to {out_path}")
+
 
 if __name__ == "__main__":
     main()

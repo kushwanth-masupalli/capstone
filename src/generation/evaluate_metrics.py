@@ -23,6 +23,18 @@ from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.bleu.bleu import Bleu
 
 
+def clean(text):
+    """Collapse all whitespace/newlines into single spaces.
+
+    This is required because METEOR talks to a Java subprocess over a
+    line-based (one message per line) protocol. Any embedded newline in a
+    hypothesis or reference string desyncs the read/write counts and causes
+    an infinite hang. Collapsing whitespace also makes BLEU/ROUGE/CIDEr
+    tokenization more consistent.
+    """
+    return " ".join(str(text).split())
+
+
 def build_coco_format(results):
     """Convert the list of dicts into pycocoevalcap format."""
 
@@ -32,8 +44,8 @@ def build_coco_format(results):
     for idx, entry in enumerate(results):
         img_id = str(idx)
 
-        refs[img_id] = [entry["reference_report"]]
-        hyps[img_id] = [entry["generated_report"]]
+        refs[img_id] = [clean(entry["reference_report"])]
+        hyps[img_id] = [clean(entry["generated_report"])]
 
     return refs, hyps
 
