@@ -24,6 +24,7 @@ The script:
      }
 """
 
+
 import argparse
 import json
 from pathlib import Path
@@ -57,7 +58,7 @@ def generate_one(processor, model, image_path: Path) -> str:
         "role": "user",
         "content": [
             {"type": "image", "image": image},
-            {"type": "text", "text": "Write a chest X‑ray report with Findings and Impression."},
+            {"type": "text", "text": "Write a chest X-ray report with Findings and Impression."},
         ],
     }]
     prompt = processor.apply_chat_template(user_msg, tokenize=False, add_generation_prompt=True)
@@ -68,14 +69,16 @@ def generate_one(processor, model, image_path: Path) -> str:
     # leaks chat-template boilerplate into the "report" text and corrupts every
     # downstream metric (BLEU/ROUGE/METEOR/CIDEr).
     input_len = inputs["input_ids"].shape[1]
-    generated_ids = model.generate(
-        **inputs,
-        max_new_tokens=200,          # reports in this dataset are short; 512 let the
-                                      # model ramble/loop far past where a real report ends
-        do_sample=False,
-        repetition_penalty=1.3,      # discourages the "not displaced. not displaced. ..." loops
-        no_repeat_ngram_size=3,
-    )
+    with torch.inference_mode():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=512,
+            do_sample=False,
+            # NOTE: no repetition_penalty / no_repeat_ngram_size here. IU-Xray
+            # reports legitimately repeat phrases ("There is no ..."), and those
+            # penalties push the model off its fine-tuned distribution into
+            # generic base-model boilerplate.
+        )
     generated_ids_trimmed = generated_ids[:, input_len:]
     generated_text = processor.decode(generated_ids_trimmed[0], skip_special_tokens=True)
     return generated_text.strip()
@@ -94,8 +97,22 @@ def main():
         raise ValueError(f"CSV must contain columns: {required}")
 
     processor, model = load_model_and_processor()
+
+    # Resume support: reuse rows already generated in a previous (interrupted)
+    # run so long jobs can be restarted without redoing everything.
+    out_path = Path(args.output)
     results = []
+    if out_path.is_file():
+        try:
+            results = json.loads(out_path.read_text(encoding="utf-8"))
+            print(f"Resuming: {len(results)} rows already present in {out_path}")
+        except (json.JSONDecodeError, OSError):
+            results = []
+    done_ids = {r["sample_id"] for r in results}
+
     for _, row in df.iterrows():
+        if row["sample_id"] in done_ids:
+            continue
         img_path = Path(row["image_path"]).expanduser()
         if not img_path.is_file():
             raise FileNotFoundError(f"Image not found: {img_path}")
@@ -107,15 +124,15 @@ def main():
             "reference_report": row["report_text"],
             "generated_report": generated,
         })
-        print(f"Processed {img_path.name}")
+        # Save progress after every image so an interrupt never loses work.
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(results, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+        print(f"Processed {img_path.name} ({len(results)}/{len(df)})")
 
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(results, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
-    print(f"All done – results saved to {out_path}")
+    print(f"All done – {len(results)} results saved to {out_path}")
 
 
 if __name__ == "__main__":
