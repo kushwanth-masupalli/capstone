@@ -4,6 +4,11 @@
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/checkpoints/qwen_finetune" />
+      <excludeFolder url="file://$MODULE_DIR$/checkpoints/qwen_finetune_patient_split/checkpoint-1740" />
+      <excludeFolder url="file://$MODULE_DIR$/checkpoints/qwen_finetune_patient_split/checkpoint-870" />
+      <excludeFolder url="file://$MODULE_DIR$/data/images" />
+      <excludeFolder url="file://$MODULE_DIR$/venv" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.12 (capstone)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
