@@ -5,16 +5,25 @@ Fine‑tune Qwen2‑VL‑2B with LoRA (4‑bit quantisation) on the IU‑Xray da
 This script follows the high‑level plan described in ``PLAN_B.md``:
 
 * Load the Qwen2‑VL‑2B‑Instruct model in 4‑bit mode via ``bitsandbytes``.
-* Attach a LoRA adapter (rank 16, alpha 16, dropout 0.05) to the language‑model
+* Attach a LoRA adapter (rank 32, alpha 32, dropout 0.05) to the language‑model
   projection layers.
 * Train on a CSV that contains one row per training example with the pre‑processed
   image path and the corresponding report text.
 * Use gradient accumulation to achieve an effective batch size of 8 on a GPU
-  with limited VRAM (≈6 GB).
+  with limited VRAM (≈6 GB).
 * Save the LoRA‑adapted model and its processor for later inference.
 
-The script is deliberately minimal – you will likely need to adapt the data‑loading
-logic (paths, column names) to match your environment.
+Training-recipe notes (aligned with published LoRA/QLoRA report-generation
+work on IU‑Xray, e.g. EMRRG and LLaMA-XR):
+* IU‑Xray reports are short (~30 words on average, 95th percentile ~55 words),
+  so the model needs many epochs to actually adapt its output *style* away
+  from the base chat model's default verbose/markdown instinct — 2 epochs is
+  not enough. We train up to 15 epochs but rely on early stopping (via
+  eval_loss) so it won't run needlessly long once it stops improving.
+* Comparable LoRA setups in the literature use rank 32 on IU‑Xray; rank 16
+  under-fits the style/content shift needed here.
+* A cosine LR schedule with warmup tends to be more stable than a constant LR
+  over many epochs on a small (~2.3k example) dataset.
 """
 
 import os
@@ -26,6 +35,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
     Trainer,
+    EarlyStoppingCallback,
 )
 # pyrefly: ignore [missing-import]
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
@@ -41,9 +51,19 @@ VALIDATION_CSV = "data/report_splits/validation.csv"
 OUTPUT_DIR = "checkpoints/qwen_finetune_patient_split"
 BATCH_SIZE = 1               # Per‑GPU batch size (1 for 4‑bit + LoRA)
 GRAD_ACCUM_STEPS = 8         # Effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS
-EPOCHS = 2
+EPOCHS = 15                  # Upper bound — early stopping will usually cut this short
 LEARNING_RATE = 1e-4
+LORA_R = 32
+LORA_ALPHA = 32
+WARMUP_STEPS = 100   # roughly ~3% of total optimizer steps for this dataset/config
+EARLY_STOPPING_PATIENCE = 3  # stop if eval_loss hasn't improved for 3 evals (epochs)
 SEED = 42
+
+# Must match the prompt used verbatim in generate_reports.py — any mismatch
+# between train-time and inference-time prompts weakens how well the LoRA
+# adapter's learned behavior transfers at generation time.
+PROMPT_TEXT = "Write a chest X-ray report with Findings and Impression."
+
 
 def main() -> None:
     if not torch.cuda.is_available():
@@ -72,8 +92,8 @@ def main() -> None:
     # -------------------- Prepare LoRA -----------------------------------
     model = prepare_model_for_kbit_training(model)
     lora_cfg = LoraConfig(
-        r=16,
-        lora_alpha=16,
+        r=LORA_R,
+        lora_alpha=LORA_ALPHA,
         target_modules=[
             "q_proj",
             "k_proj",
@@ -87,6 +107,7 @@ def main() -> None:
         bias="none",
     )
     model = get_peft_model(model, lora_cfg)
+    model.print_trainable_parameters()
 
     # -------------------- Dataset ---------------------------------------
     # Keep raw paths/text in the dataset. Vision-language samples must be
@@ -117,7 +138,7 @@ def main() -> None:
                 "role": "user",
                 "content": [
                     {"type": "image", "image": image},
-                    {"type": "text", "text": "Write a chest X-ray report with Findings and Impression."},
+                    {"type": "text", "text": PROMPT_TEXT},
                 ],
             }]
             prompt_text = processor.apply_chat_template(
@@ -150,11 +171,13 @@ def main() -> None:
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
         num_train_epochs=EPOCHS,
         learning_rate=LEARNING_RATE,
+        lr_scheduler_type="cosine",
+        warmup_steps=WARMUP_STEPS,
         fp16=True,
         logging_steps=10,
         eval_strategy="epoch",
         save_strategy="epoch",
-        save_total_limit=1,
+        save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
@@ -174,6 +197,7 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=validation_dataset,
         data_collator=data_collator,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=EARLY_STOPPING_PATIENCE)],
     )
 
     trainer.train()
@@ -181,6 +205,7 @@ def main() -> None:
     model.save_pretrained(OUTPUT_DIR)
     processor.save_pretrained(OUTPUT_DIR)
     print(f"Finetuning complete – checkpoint saved to {OUTPUT_DIR}")
+
 
 if __name__ == "__main__":
     main()
