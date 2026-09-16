@@ -1,37 +1,33 @@
 #!/usr/bin/env python3
-"""
-Fine‑tune Qwen2‑VL‑2B with LoRA (4‑bit quantisation) on the IU‑Xray dataset.
+"""Fine‑tune the MedGemma multimodal model (image‑text‑to‑text) on the IU‑Xray dataset.
 
-This script follows the high‑level plan described in ``PLAN_B.md``:
+This script mirrors the original Qwen2‑VL fine‑tuning script but swaps in the
+MedGemma model class (``AutoModelForImageTextToText``) and processor. It uses
+LoRA (via ``peft``) with 4‑bit quantisation (``bitsandbytes``) to keep VRAM
+requirements low (≈6 GB on a RTX 4050).
 
-* Load the Qwen2‑VL‑2B‑Instruct model in 4‑bit mode via ``bitsandbytes``.
-* Attach a LoRA adapter (rank 32, alpha 32, dropout 0.05) to the language‑model
-  projection layers.
-* Train on a CSV that contains one row per training example with the pre‑processed
-  image path and the corresponding report text.
-* Use gradient accumulation to achieve an effective batch size of 8 on a GPU
-  with limited VRAM (≈6 GB).
-* Save the LoRA‑adapted model and its processor for later inference.
+Training steps
+--------------
+1. Load the MedGemma processor and 4‑bit‑quantised base model.
+2. Prepare the model for k‑bit training and attach a LoRA adapter.
+3. Load CSV splits containing ``image_path`` and ``report_text`` columns.
+4. Use a custom collator that builds a chat‑style prompt (image + static
+   ``PROMPT_TEXT``) and masks the prompt tokens from the language‑model loss.
+5. Run ``Trainer`` with early‑stopping on the validation split.
+6. Save the LoRA‑adapted model and processor for inference.
 
-Training-recipe notes (aligned with published LoRA/QLoRA report-generation
-work on IU‑Xray, e.g. EMRRG and LLaMA-XR):
-* IU‑Xray reports are short (~30 words on average, 95th percentile ~55 words),
-  so the model needs many epochs to actually adapt its output *style* away
-  from the base chat model's default verbose/markdown instinct — 2 epochs is
-  not enough. We train up to 15 epochs but rely on early stopping (via
-  eval_loss) so it won't run needlessly long once it stops improving.
-* Comparable LoRA setups in the literature use rank 32 on IU‑Xray; rank 16
-  under-fits the style/content shift needed here.
-* A cosine LR schedule with warmup tends to be more stable than a constant LR
-  over many epochs on a small (~2.3k example) dataset.
+The script can be launched with ``python src/generation/finetune.py`` after
+installing the required dependencies (see the instructions below).
 """
 
 import os
 import torch
+from pathlib import Path
 from PIL import Image
+
 from transformers import (
     AutoProcessor,
-    Qwen2VLForConditionalGeneration,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     TrainingArguments,
     Trainer,
@@ -43,53 +39,53 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
 
 # ---------------------------------------------------------------------------
-# Configuration (adjust as needed)
+# Configuration – edit these paths / hyper‑parameters as needed
 # ---------------------------------------------------------------------------
-MODEL_NAME = "Qwen/Qwen2-VL-2B-Instruct"  # HuggingFace repo name
+MODEL_NAME = "google/medgemma-1.5-4b-it"  # HuggingFace repo name for MedGemma
 TRAIN_CSV = "data/report_splits/train.csv"
 VALIDATION_CSV = "data/report_splits/validation.csv"
-OUTPUT_DIR = "checkpoints/qwen_finetune_patient_split"
+OUTPUT_DIR = "checkpoints/medgemma_finetune"
 BATCH_SIZE = 1               # Per‑GPU batch size (1 for 4‑bit + LoRA)
 GRAD_ACCUM_STEPS = 8         # Effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS
-EPOCHS = 15                  # Upper bound — early stopping will usually cut this short
+EPOCHS = 15                  # Upper bound – early stopping will usually stop earlier
 LEARNING_RATE = 1e-4
 LORA_R = 32
 LORA_ALPHA = 32
-WARMUP_STEPS = 100   # roughly ~3% of total optimizer steps for this dataset/config
-EARLY_STOPPING_PATIENCE = 3  # stop if eval_loss hasn't improved for 3 evals (epochs)
+WARMUP_STEPS = 100
+EARLY_STOPPING_PATIENCE = 3
 SEED = 42
 
-# Must match the prompt used verbatim in generate_reports.py — any mismatch
-# between train-time and inference-time prompts weakens how well the LoRA
-# adapter's learned behavior transfers at generation time.
+# Prompt used for every training example – must match the one used at inference
 PROMPT_TEXT = "Write a chest X-ray report with Findings and Impression."
 
 
 def main() -> None:
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA GPU is required for Qwen2-VL fine-tuning, but none was detected.")
+        raise RuntimeError("CUDA GPU is required for MedGemma fine‑tuning, but none was detected.")
     torch.cuda.empty_cache()
     print(f"Training on GPU: {torch.cuda.get_device_name(0)}")
 
-    # -------------------- Load processor & model (4‑bit) --------------------
+    # -----------------------------------------------------
+    # Load processor & base model (4‑bit quantisation)
+    # -----------------------------------------------------
     processor = AutoProcessor.from_pretrained(MODEL_NAME)
-    quantization_config = BitsAndBytesConfig(
+    quant_cfg = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_use_double_quant=True,
         bnb_4bit_compute_dtype=torch.float16,
     )
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         MODEL_NAME,
-        quantization_config=quantization_config,
-        # Force the trainable model onto the RTX 4050 instead of allowing
-        # automatic CPU offloading, which makes the first batch appear stuck.
-        device_map={"": 0},
+        quantization_config=quant_cfg,
+        device_map={"": 0},  # force onto GPU 0
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
     )
 
-    # -------------------- Prepare LoRA -----------------------------------
+    # -----------------------------------------------------
+    # LoRA configuration
+    # -----------------------------------------------------
     model = prepare_model_for_kbit_training(model)
     lora_cfg = LoraConfig(
         r=LORA_R,
@@ -109,32 +105,43 @@ def main() -> None:
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
 
-    # -------------------- Dataset ---------------------------------------
-    # Keep raw paths/text in the dataset. Vision-language samples must be
-    # processed at batch time, because image sizes and token lengths vary.
+    # -----------------------------------------------------
+    # Load CSV datasets – keep raw columns for the collator
+    # -----------------------------------------------------
     datasets = load_dataset(
         "csv", data_files={"train": TRAIN_CSV, "validation": VALIDATION_CSV}
     )
     train_dataset = datasets["train"]
     validation_dataset = datasets["validation"]
 
+    # -----------------------------------------------------
+    # Custom collator that builds a chat‑style example and masks the prompt
+    # -----------------------------------------------------
     class ReportCollator:
-        """Build one Qwen2-VL supervised training batch (BATCH_SIZE is one)."""
+        """Create a single training example (BATCH_SIZE == 1).
+
+        The collator:
+        1. Loads the image from ``image_path``.
+        2. Builds a user message consisting of the image and ``PROMPT_TEXT``.
+        3. Applies the processor chat template to obtain ``prompt_text``.
+        4. Concatenates ``prompt_text`` and the ground‑truth report, then tokenises.
+        5. Masks the prompt tokens (label ``-100``) so LoRA only learns to generate
+           the report text.
+        """
 
         def __call__(self, features):
             if len(features) != 1:
-                raise ValueError("This collator supports BATCH_SIZE=1 only.")
-
+                raise ValueError("ReportCollator expects BATCH_SIZE == 1")
             feature = features[0]
             image_path = feature["image_path"]
             report = str(feature["report_text"]).strip()
             if not report:
                 raise ValueError(f"Empty report text for {image_path}")
 
-            with Image.open(image_path) as raw_image:
-                image = raw_image.convert("RGB")
+            with Image.open(image_path) as raw_img:
+                image = raw_img.convert("RGB")
 
-            user_messages = [{
+            user_msg = [{
                 "role": "user",
                 "content": [
                     {"type": "image", "image": image},
@@ -142,13 +149,12 @@ def main() -> None:
                 ],
             }]
             prompt_text = processor.apply_chat_template(
-                user_messages, tokenize=False, add_generation_prompt=True
+                user_msg, tokenize=False, add_generation_prompt=True
             )
             eos_token = processor.tokenizer.eos_token or ""
             full_text = f"{prompt_text}{report}{eos_token}"
 
-            # Encode both versions with the same image.  Their length difference
-            # lets us exclude instruction/image tokens from the language-model loss.
+            # Tokenise prompt and full sequence separately – needed for loss mask
             prompt_inputs = processor(
                 text=[prompt_text], images=[image], padding=True, return_tensors="pt"
             )
@@ -157,13 +163,16 @@ def main() -> None:
             )
             labels = inputs["input_ids"].clone()
             labels[labels == processor.tokenizer.pad_token_id] = -100
-            labels[:, :prompt_inputs["input_ids"].shape[1]] = -100
+            # Mask prompt tokens
+            labels[:, : prompt_inputs["input_ids"].shape[1]] = -100
             inputs["labels"] = labels
             return inputs
 
     data_collator = ReportCollator()
 
-    # -------------------- Training arguments ---------------------------
+    # -----------------------------------------------------
+    # Training arguments – similar to the original Qwen2 script
+    # -----------------------------------------------------
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=BATCH_SIZE,
@@ -181,12 +190,8 @@ def main() -> None:
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        # PeftModel hides the base model signature; explicitly identify the
-        # supervised loss tensor so Trainer reports eval_loss during validation.
         label_names=["labels"],
         remove_unused_columns=False,
-        # Avoid importing TensorBoard.  The local TensorFlow/TensorBoard pair is
-        # incompatible, and logging is not required for this training run.
         report_to="none",
         seed=SEED,
     )
@@ -201,10 +206,11 @@ def main() -> None:
     )
 
     trainer.train()
-    # Save both the adapted model and the processor for later inference.
+
+    # Save the LoRA‑adapted checkpoint and processor for later inference
     model.save_pretrained(OUTPUT_DIR)
     processor.save_pretrained(OUTPUT_DIR)
-    print(f"Finetuning complete – checkpoint saved to {OUTPUT_DIR}")
+    print(f"Fine‑tuning complete – checkpoint saved to {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
