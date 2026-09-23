@@ -1,10 +1,10 @@
-"""Demo sanity‑check script for the end‑to‑end pipeline.
+"""Demo sanity-check script for the end-to-end pipeline.
 
 Running this script will:
-  1. Load a sample chest X‑ray image from the ``data/images/preprocessed`` directory.
+  1. Load a sample chest X-ray image from the ``data/images/preprocessed`` directory.
   2. Run the classifier and display the top predictions.
-  3. Generate a Grad‑CAM overlay for the top prediction.
-  4. Produce a generated report using the fine‑tuned Qwen‑2‑VL LoRA model.
+  3. Generate a Grad-CAM overlay for the top prediction.
+  4. Produce a generated report using the fine-tuned Qwen-2-VL LoRA model.
   5. Run the hallucination detection logic and print any flags.
 
 The script is intended for quick verification and can be used in CI.
@@ -37,14 +37,14 @@ def main():
 
     # ---------- Classifier ----------
     probs = predict(str(img_path))
-    # Show top‑3 predictions.
+    # Show top-3 predictions.
     top3 = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)[:3]
     print("Top classifier predictions (probability):")
     for label, prob in top3:
         print(f"  {label:25s}: {prob:.3f}")
     predicted_labels = [label for label, p in probs.items() if p >= 0.5]
 
-    # ---------- Grad‑CAM (for the highest‑probability label) ----------
+    # ---------- Grad-CAM (for the highest-probability label) ----------
     if predicted_labels:
         from classifier.predict import preprocess_image
         img_tensor = preprocess_image(img_path)
@@ -54,11 +54,11 @@ def main():
         class_idx = label_to_idx[top_label]
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_cam:
             cam_path = generate_gradcam(classifier_model, img_tensor, class_idx, tmp_cam.name)
-            print(f"\nGrad‑CAM written to: {cam_path}")
-        # Cleanup Grad‑CAM file after display.
+            print(f"\nGrad-CAM written to: {cam_path}")
+        # Cleanup Grad-CAM file after display.
         os.remove(cam_path)
     else:
-        print("No predictions above threshold – skipping Grad‑CAM.")
+        print("No predictions above threshold – skipping Grad-CAM.")
 
     # ---------- Report generation ----------
     report = run_report(str(img_path))

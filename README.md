@@ -18,10 +18,10 @@ chest X-rays:
 
 | Metric | Value |
 |---|---|
-| BLEU‑1 | 0.2108 |
-| ROUGE‑L | 0.2803 |
-| METEOR | (to be computed) |
-| CIDEr | (to be computed) |
+| BLEU-1 | 0.2362 |
+| ROUGE-L | 0.1902 |
+| METEOR | 0.1737 |
+| CIDEr | 0.1197 |
 
 *The numbers above correspond to the held‑out patient split (no leakage). METEOR and CIDEr will be filled in once the evaluation script runs successfully.*
 

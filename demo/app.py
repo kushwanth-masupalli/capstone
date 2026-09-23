@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Streamlit demo for the chest‑X‑ray report generator.
+"""Streamlit demo for the chest-X-ray report generator.
 
 Run with:
     streamlit run demo/app.py
 
-The app lets a user upload a frontal X‑ray image, optionally type patient history,
+The app lets a user upload a frontal X-ray image, optionally type patient history,
 presses **Generate** and shows the generated report (and placeholder fields for
-findings, Grad‑CAM, hallucination flags).
+findings, Grad-CAM, hallucination flags).
 """
 
 import os
@@ -31,11 +31,11 @@ from explainability.gradcam import generate_gradcam
 from inference.pipeline import run_report
 from hallucination.check import extract_findings, compare_hallucination
 
-st.title("Chest X‑Ray Report Generator (Qwen‑2‑VL‑2B LoRA)")
+st.title("Chest X-Ray Report Generator (Qwen-2-VL-2B LoRA)")
 
-uploaded = st.file_uploader("Upload a frontal X‑ray image (PNG/JPG)", type=["png", "jpg", "jpeg"])
-# Optional free‑form patient history – not used in current demo but kept for future extension.
-history_text = st.text_area("Optional patient history (free‑form text)", height=150)
+uploaded = st.file_uploader("Upload a frontal X-ray image (PNG/JPG)", type=["png", "jpg", "jpeg"])
+# Optional free-form patient history – not used in current demo but kept for future extension.
+history_text = st.text_area("Optional patient history (free-form text)", height=150)
 
 if uploaded:
     # Save uploaded file to a temporary location.
@@ -58,11 +58,11 @@ if uploaded:
         st.subheader("Classifier Predictions")
         st.table(prob_rows)
 
-        # ---------- Grad‑CAM ----------
-        # Show Grad‑CAM for the top‑2 predicted findings (or fewer if less).
+        # ---------- Grad-CAM ----------
+        # Show Grad-CAM for the top-2 predicted findings (or fewer if less).
         if predicted_labels:
-            st.subheader("Grad‑CAM visualizations (top predictions)")
-            # Load classifier model once for Grad‑CAM generation.
+            st.subheader("Grad-CAM visualizations (top predictions)")
+            # Load classifier model once for Grad-CAM generation.
             classifier_model = load_classifier()
             # Preprocess image into the tensor format expected by the classifier.
             from classifier.predict import preprocess_image
@@ -77,13 +77,13 @@ if uploaded:
                     cam_path = cam_file.name
                 try:
                     generate_gradcam(classifier_model, img_tensor, class_idx, cam_path)
-                    st.image(cam_path, caption=f"Grad‑CAM for {label}", width=400)
+                    st.image(cam_path, caption=f"Grad-CAM for {label}", width=400)
                 finally:
-                    # Clean up the temporary Grad‑CAM image after display.
+                    # Clean up the temporary Grad-CAM image after display.
                     if os.path.exists(cam_path):
                         os.remove(cam_path)
         else:
-            st.info("No findings predicted with probability ≥ 0.5 – Grad‑CAM skipped.")
+            st.info("No findings predicted with probability ≥ 0.5 – Grad-CAM skipped.")
 
         # ---------- Report Generation ----------
         generated_report = run_report(img_path)

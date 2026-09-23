@@ -15,12 +15,31 @@ BLEU-1, ROUGE-L, METEOR and CIDEr scores.
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.meteor.meteor import Meteor
 from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.bleu.bleu import Bleu
+
+
+# Matches a full chat-template transcript leaked into a "report": the
+# system role line, the user role + instruction, and the assistant marker.
+# Produced by older decoding that did not slice off the prompt tokens.
+_CHAT_TEMPLATE_RE = re.compile(
+    r"^\s*system\s*\n.*?\buser\s*\n.*?\bassistant\s*\n?",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+
+
+def strip_chat_template_leakage(text: str) -> str:
+    """Remove chat-template boilerplate leaked into a generated report.
+
+    Defensive cleanup for result JSONs produced before the decode-trimming fix.
+    Clean artifacts pass through unchanged (no false edits).
+    """
+    return _CHAT_TEMPLATE_RE.sub("", str(text)).strip()
 
 
 def clean(text):
@@ -45,7 +64,7 @@ def build_coco_format(results):
         img_id = str(idx)
 
         refs[img_id] = [clean(entry["reference_report"])]
-        hyps[img_id] = [clean(entry["generated_report"])]
+        hyps[img_id] = [clean(strip_chat_template_leakage(entry["generated_report"]))]
 
     return refs, hyps
 

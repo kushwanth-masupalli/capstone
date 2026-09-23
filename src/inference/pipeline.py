@@ -18,6 +18,10 @@ from peft import PeftModel
 
 CHECKPOINT_DIR = Path("checkpoints/qwen_finetune_patient_split")
 
+# Must EXACTLY match PROMPT_TEXT in src/generation/finetune.py: the model was
+# LoRA-trained on this instruction, so inference must use the same one.
+PROMPT_TEXT = "Write a chest X-ray report with Findings and Impression."
+
 
 def load_model_and_processor():
     processor = AutoProcessor.from_pretrained(
@@ -68,7 +72,7 @@ def generate_report(processor, model, image_path: Path) -> str:
                 },
                 {
                     "type": "text",
-                    "text": "Write a chest X-ray report with Findings"
+                    "text": PROMPT_TEXT
                 },
             ],
         }
@@ -104,6 +108,8 @@ def generate_report(processor, model, image_path: Path) -> str:
     # Generate report
     # ---------------------------------------------------------
 
+    input_len = inputs["input_ids"].shape[1]
+
     with torch.inference_mode():
 
         generated_ids = model.generate(
@@ -113,11 +119,19 @@ def generate_report(processor, model, image_path: Path) -> str:
         )
 
     # ---------------------------------------------------------
-    # Decode
+    # Decode — ONLY the newly generated tokens.
+    #
+    # generated_ids initially contains the full sequence (prompt +
+    # generation). Decoding the whole thing leaks the chat-template
+    # boilerplate ("system\nYou are a helpful assistant.\nuser\n...") into
+    # the "report" text shown in the UI and fed to the hallucination
+    # checker. Slice off the prompt tokens before decoding.
     # ---------------------------------------------------------
 
+    generated_ids_trimmed = generated_ids[:, input_len:]
+
     generated = processor.decode(
-        generated_ids[0],
+        generated_ids_trimmed[0],
         skip_special_tokens=True
     )
 

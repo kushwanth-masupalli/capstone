@@ -9,7 +9,7 @@ requirements low (≈6 GB on a RTX 4050).
 Training steps
 --------------
 1. Load the MedGemma processor and 4‑bit‑quantised base model.
-2. Prepare the model for k‑bit training and attach a LoRA adapter.
+2. Attach a LoRA adapter and enable gradient checkpointing (see note below).
 3. Load CSV splits containing ``image_path`` and ``report_text`` columns.
 4. Use a custom collator that builds a chat‑style prompt (image + static
    ``PROMPT_TEXT``) and masks the prompt tokens from the language‑model loss.
@@ -20,9 +20,7 @@ The script can be launched with ``python src/generation/finetune.py`` after
 installing the required dependencies (see the instructions below).
 """
 
-import os
 import torch
-from pathlib import Path
 from PIL import Image
 
 from transformers import (
@@ -34,7 +32,7 @@ from transformers import (
     EarlyStoppingCallback,
 )
 # pyrefly: ignore [missing-import]
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
 # pyrefly: ignore [missing-import]
 from datasets import load_dataset
 
@@ -68,25 +66,33 @@ def main() -> None:
     # -----------------------------------------------------
     # Load processor & base model (4‑bit quantisation)
     # -----------------------------------------------------
-    processor = AutoProcessor.from_pretrained(MODEL_NAME)
+    processor = AutoProcessor.from_pretrained(MODEL_NAME,token=True,trust_remote_code=True)
     quant_cfg = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_use_double_quant=True,
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,  # bf16 is MedGemma's native dtype (RTX 4050 supports it)
     )
     model = AutoModelForImageTextToText.from_pretrained(
         MODEL_NAME,
         quantization_config=quant_cfg,
         device_map={"": 0},  # force onto GPU 0
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
+        token=True,  # <-- same token handling
+        trust_remote_code=True,  # <-- keep if the model defines custom classes
     )
+    model.config.use_cache = False  # KV cache is useless (and harmful) during training
 
     # -----------------------------------------------------
     # LoRA configuration
     # -----------------------------------------------------
-    model = prepare_model_for_kbit_training(model)
+    # NOTE: do NOT use prepare_model_for_kbit_training here. It upcasts every
+    # fp16 param to fp32, which on medgemma-1.5-4b-it includes the ~262k-vocab
+    # embedding (1.3 GB → 2.7 GB) and leaves a 6 GB GPU with 0 bytes free, so
+    # the first forward pass OOMs. Gradient checkpointing + input grads give
+    # the same benefit (frozen-input grads + activation checkpointing) without
+    # the fp32 blow-up.
     lora_cfg = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
@@ -104,6 +110,10 @@ def main() -> None:
     )
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
+    # Canonical PEFT order: enable checkpointing AFTER wrapping with the adapter,
+    # then require input grads so the frozen first layer receives gradients.
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()
 
     # -----------------------------------------------------
     # Load CSV datasets – keep raw columns for the collator
@@ -132,6 +142,7 @@ def main() -> None:
         def __call__(self, features):
             if len(features) != 1:
                 raise ValueError("ReportCollator expects BATCH_SIZE == 1")
+
             feature = features[0]
             image_path = feature["image_path"]
             report = str(feature["report_text"]).strip()
@@ -148,9 +159,13 @@ def main() -> None:
                     {"type": "text", "text": PROMPT_TEXT},
                 ],
             }]
+
             prompt_text = processor.apply_chat_template(
-                user_msg, tokenize=False, add_generation_prompt=True
+                user_msg,
+                tokenize=False,
+                add_generation_prompt=True
             )
+
             eos_token = processor.tokenizer.eos_token or ""
             full_text = f"{prompt_text}{report}{eos_token}"
 
@@ -166,6 +181,10 @@ def main() -> None:
             # Mask prompt tokens
             labels[:, : prompt_inputs["input_ids"].shape[1]] = -100
             inputs["labels"] = labels
+
+            # Return CPU tensors: the Trainer's DataLoader pins CPU tensors, then
+            # moves the batch to the model's device itself. Returning CUDA tensors
+            # here would crash pin_memory ("only dense CPU tensors can be pinned").
             return inputs
 
     data_collator = ReportCollator()
@@ -182,7 +201,8 @@ def main() -> None:
         learning_rate=LEARNING_RATE,
         lr_scheduler_type="cosine",
         warmup_steps=WARMUP_STEPS,
-        fp16=True,
+        fp16=False,
+        bf16=True,   # RTX 4050 supports bf16; matches bnb_4bit_compute_dtype
         logging_steps=10,
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -210,7 +230,7 @@ def main() -> None:
     # Save the LoRA‑adapted checkpoint and processor for later inference
     model.save_pretrained(OUTPUT_DIR)
     processor.save_pretrained(OUTPUT_DIR)
-    print(f"Fine‑tuning complete – checkpoint saved to {OUTPUT_DIR}")
+    print(f"Fine-tuning complete - checkpoint saved to {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

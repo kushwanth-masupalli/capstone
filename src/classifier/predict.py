@@ -8,7 +8,7 @@ from PIL import Image
 # Path to the trained classifier checkpoint (produced by your training run,
 # NOT the generic public XRV checkpoint). Change this if you decide a
 # different .pth file is your "real" final model.
-CHECKPOINT_PATH = Path("checkpoints") / "xrv_chex_best_model.pth"
+CHECKPOINT_PATH = Path("checkpoints") / "base_best_model.pth"
 
 # The XRV backbone this checkpoint was fine-tuned from. Only used to build
 # the matching feature-extractor architecture before loading your weights —

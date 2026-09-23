@@ -82,11 +82,7 @@ def generate_one(processor, model, classifier, image_path: Path):
         "role": "user",
         "content": [
             {"type": "image", "image": image},
-            {"type": "text", "text": (
-                f"{grounding} "
-                "Write a chest X-ray report with Findings and Impression, "
-                "based only on what is visible in this image."
-            )},
+            {"type": "text", "text": "Write a chest X-ray report with Findings and Impression."},
         ],
     }]
     prompt = processor.apply_chat_template(user_msg, tokenize=False, add_generation_prompt=True)
@@ -102,8 +98,6 @@ def generate_one(processor, model, classifier, image_path: Path):
         max_new_tokens=200,          # reports in this dataset are short; 512 let the
                                       # model ramble/loop far past where a real report ends
         do_sample=False,
-        repetition_penalty=1.3,      # discourages "not displaced. not displaced. ..." loops
-        no_repeat_ngram_size=3,
     )
     generated_ids_trimmed = generated_ids[:, input_len:]
     generated_text = processor.decode(generated_ids_trimmed[0], skip_special_tokens=True)
