@@ -1,4 +1,9 @@
-**Execution Summary**
+**Execution Summary**
+
+> NOTE (PLAN 4): the sections below describe the **Qwen-2-VL era** of this
+> project. The `medgemma` branch has since switched report generation to
+> MedGemma 1.5 4B (see `plan4.md`); the Qwen checkpoints remain as legacy
+> reference only.
 
 **What we have done**
 1. Added a full‑featured Streamlit UI (`demo/app.py`) that:

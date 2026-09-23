@@ -4,7 +4,7 @@ Running this script will:
   1. Load a sample chest X-ray image from the ``data/images/preprocessed`` directory.
   2. Run the classifier and display the top predictions.
   3. Generate a Grad-CAM overlay for the top prediction.
-  4. Produce a generated report using the fine-tuned Qwen-2-VL LoRA model.
+  4. Produce a generated report using the fine-tuned MedGemma LoRA model.
   5. Run the hallucination detection logic and print any flags.
 
 The script is intended for quick verification and can be used in CI.

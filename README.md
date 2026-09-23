@@ -25,6 +25,16 @@ chest X-rays:
 
 *The numbers above correspond to the held‑out patient split (no leakage). METEOR and CIDEr will be filled in once the evaluation script runs successfully.*
 
+**`XXXX` policy (PLAN 4, Instruction 9):** anonymisation tokens (`XXXX`, present
+in ~42% of IU‑Xray reports) are stripped from **training targets** only
+(`report_text_clean` column, built by `scripts/make_vlm_data.py`). Evaluation
+should be reported on both raw and stripped references; never mix the two in
+one table.
+
+**Duplicate cap (PLAN 4, Instruction 10):** exact‑duplicate reports are capped
+at 3 copies in the train split only (2,320 → ~1,994 rows). Val/test are
+untouched.
+
 
 | Metric | Value |
 |---|---|
@@ -46,31 +56,31 @@ Model of record: `checkpoints/base_best_model.pth`.
 ./venv/Scripts/python.exe app.py
 ```
 
-**Report Generation (Qwen‑2‑VL‑2B LoRA)**
+**Report Generation (MedGemma 4B LoRA — see `plan4.md`)**
 
 ```bash
 # 1️⃣ Create patient‑level CSV splits (if not already present)
 python src/generation/create_finetune_csv.py
 
-# 2️⃣ Fine‑tune the Qwen model (LoRA, 4‑bit)
-python src/generation/finetune.py
+# 2️⃣ Fine‑tune MedGemma (LoRA, 4‑bit LM / bf16 vision)
+python src/generation/finetune.py          # smoke test: --max_steps 20 --limit 64
 
 # 3️⃣ Generate reports on the held‑out test split
 python src/generation/generate_reports.py \
     --split data/report_splits/test.csv \
-    --output results/finetuned_patient_split/pipeline_results.json
+    --output results/medgemma_patient_split/pipeline_results.json
 
 # 4️⃣ Evaluate (BLEU‑1, ROUGE‑L, METEOR, CIDEr)
 python src/generation/evaluate_metrics.py \
-    results/finetuned_patient_split/pipeline_results.json \
+    results/medgemma_patient_split/pipeline_results.json \
     data/report_splits/test.csv \
-    --output results/finetuned_patient_split/evaluation.json
+    --output results/medgemma_patient_split/evaluation.json
 
 # 5️⃣ Create a blinded review set (e.g., 25 samples)
 python src/generation/create_review_set.py \
-    --generated results/finetuned_patient_split/pipeline_results.json \
+    --generated results/medgemma_patient_split/pipeline_results.json \
     --split data/report_splits/test.csv \
-    --output results/finetuned_patient_split/review_set.csv \
+    --output results/medgemma_patient_split/review_set.csv \
     --sample 25
 ```
 
@@ -102,6 +112,7 @@ The Streamlit app lets you upload an X‑ray, runs the inference wrapper, and di
 | `gan` | **Closed — failed** | GAN synthetic-augmentation experiment for rare classes. Full record + failure analysis in `GAN_AUGMENTATION.md`. DCGAN never produced usable images (no checkpoints/synthetic data ever saved) |
 | `pseudo-labeling` | **Closed — failed** | NIH pool pseudo-labeling (self-training) experiment. Full record + failure analysis in `PSEUDO_LABELING.md`. Pool stalled at 208/15–20k images (raw NIH download never completed) |
 | `renkario` | **Active** | Clean 7-pathology baseline with both failed experiment code paths removed — start new work here |
+| `medgemma` | **Active** | MedGemma 1.5 4B LoRA report generation; fixes + speed plan in `plan4.md` |
 
 Both closed experiments are archived on their branches with honest
 results/why-they-failed documentation, so `renkario` starts from the clean

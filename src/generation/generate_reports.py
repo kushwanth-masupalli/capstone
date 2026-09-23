@@ -1,61 +1,47 @@
 #!/usr/bin/env python3
-"""Generate reports for a set of X-ray images using the fine-tuned LoRA Qwen-2-VL-2B model.
+"""Generate reports for a CSV split with the fine-tuned MedGemma LoRA model.
+
+Rewired per PLAN 4 (Instruction 7): the model class, processor, base-model id,
+prompt text and checkpoint dir all come from ``medgemma_io.py``, so training
+and inference can never drift apart.
 
 Usage:
     python src/generation/generate_reports.py \
         --split data/report_splits/test.csv \
-        --output results/finetuned_patient_split/pipeline_results.json
+        --output results/medgemma_patient_split/pipeline_results.json \
+        --limit 5
 
-This version grounds each generation with predictions from the existing
-TorchXRayVision classifier (src/classifier/predict.py). The Qwen2-VL model on
-its own was shown to hallucinate findings unrelated to the specific image
-(e.g. abdominal free-air, spine changes copied from other training reports)
-because its own visual conditioning on X-rays is weak. Feeding it the
-classifier's top predicted pathologies as explicit context grounds the
-generation in something the image actually supports, instead of relying
-solely on the VLM's own (undertrained) visual understanding.
+The TorchXRayVision classifier still runs per image to fill
+``predicted_findings`` for the hallucination checker and Grad-CAM. Its output
+is NOT put in the prompt (classifier grounding was removed in ``dd428b6``).
 """
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-import torch
-from PIL import Image
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-from peft import PeftModel
+sys.path.append(str(Path(__file__).resolve().parents[1]))  # allow `from classifier...`
+from classifier.predict import load_classifier, preprocess_image  # noqa: E402
 
-import sys
-sys.path.append(str(Path(__file__).resolve().parents[1]))  # allow `from classifier...` import
-from classifier.predict import load_classifier, preprocess_image
+import torch  # noqa: E402
 
-CHECKPOINT_DIR = Path("checkpoints/qwen_finetune_patient_split")
+sys.path.append(str(Path(__file__).resolve().parent))
+from generation.medgemma_io import (  # noqa: E402
+    PROMPT_TEXT,
+    generate_report_for_image,
+    load_image,
+    load_model_and_processor,
+)
 
-# Probability above which a pathology is mentioned as a candidate finding in
-# the grounding context. TorchXRayVision models are not perfectly calibrated,
-# so this is a soft signal for the prompt, not a diagnosis.
+# Probability above which a pathology is recorded as a candidate finding in the
+# JSON (for the hallucination checker / demo). Not injected into the prompt.
 FINDING_THRESHOLD = 0.5
 MAX_FINDINGS = 5
 
 
-def load_model_and_processor():
-    """Load the base Qwen-2-VL-2B model, attach the LoRA adapter, and return the processor."""
-    processor = AutoProcessor.from_pretrained(CHECKPOINT_DIR, trust_remote_code=True)
-    base_model = Qwen2VLForConditionalGeneration.from_pretrained(
-        "Qwen/Qwen2-VL-2B-Instruct",
-        device_map={"": 0},
-        torch_dtype=torch.float16,
-        low_cpu_mem_usage=True,
-    )
-    model = PeftModel.from_pretrained(base_model, CHECKPOINT_DIR)
-    model.eval()
-    return processor, model
-
-
 def get_predicted_findings(classifier, image_path: Path):
-    """Run the TorchXRayVision classifier and return a short list of the
-    highest-probability pathologies above FINDING_THRESHOLD, sorted by
-    confidence. Returns an empty list if nothing crosses the threshold."""
+    """Top pathologies above FINDING_THRESHOLD from the TorchXRayVision classifier."""
     img_tensor = preprocess_image(image_path)
     with torch.no_grad():
         logits = classifier(img_tensor)
@@ -66,65 +52,49 @@ def get_predicted_findings(classifier, image_path: Path):
     return [label for label, _ in pairs[:MAX_FINDINGS]]
 
 
-def build_grounding_text(findings):
-    if not findings:
-        return "Automated screening detected no significant abnormal findings."
-    joined = ", ".join(findings)
-    return f"Automated screening flagged possible: {joined}. Confirm or refute each against the image."
-
-
-def generate_one(processor, model, classifier, image_path: Path):
-    image = Image.open(image_path).convert("RGB")
-    findings = get_predicted_findings(classifier, image_path)
-    grounding = build_grounding_text(findings)
-
-    user_msg = [{
-        "role": "user",
-        "content": [
-            {"type": "image", "image": image},
-            {"type": "text", "text": "Write a chest X-ray report with Findings and Impression."},
-        ],
-    }]
-    prompt = processor.apply_chat_template(user_msg, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=prompt, images=image, return_tensors="pt").to(model.device)
-
-    # Only the NEWLY generated tokens should be decoded — generated_ids initially
-    # contains the full sequence (prompt + generation). Decoding the whole thing
-    # leaks chat-template boilerplate into the "report" text and corrupts every
-    # downstream metric (BLEU/ROUGE/METEOR/CIDEr).
-    input_len = inputs["input_ids"].shape[1]
-    generated_ids = model.generate(
-        **inputs,
-        max_new_tokens=200,          # reports in this dataset are short; 512 let the
-                                      # model ramble/loop far past where a real report ends
-        do_sample=False,
-    )
-    generated_ids_trimmed = generated_ids[:, input_len:]
-    generated_text = processor.decode(generated_ids_trimmed[0], skip_special_tokens=True)
-    return generated_text.strip(), findings
+def generate_one(processor, model, image_path: Path):
+    image = load_image(image_path)
+    return generate_report_for_image(processor, model, image, PROMPT_TEXT)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate reports for a CSV split.")
-    parser.add_argument("--split", required=True, help="CSV with test split (sample_id,uid,image_path,report_text)")
+    parser = argparse.ArgumentParser(description="Generate reports for a CSV split (MedGemma).")
+    parser.add_argument("--split", required=True,
+                        help="CSV with test split (sample_id,uid,image_path,report_text)")
     parser.add_argument("--output", required=True, help="Path to write JSON results.")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Only process the first N rows (smoke test).")
+    parser.add_argument("--no-classifier", action="store_true",
+                        help="Skip the TorchXRayVision classifier entirely.")
     args = parser.parse_args()
 
     import pandas as pd
+
     df = pd.read_csv(args.split)
     required = {"sample_id", "uid", "image_path", "report_text"}
     if not required.issubset(set(df.columns)):
         raise ValueError(f"CSV must contain columns: {required}")
+    if args.limit:
+        df = df.head(args.limit)
 
     processor, model = load_model_and_processor()
-    classifier = load_classifier()
+    classifier = None if args.no_classifier else load_classifier()
 
     results = []
     for _, row in df.iterrows():
-        img_path = Path(row["image_path"]).expanduser()
+        img_path = Path(str(row["image_path"]).replace("\\", "/"))
         if not img_path.is_file():
-            raise FileNotFoundError(f"Image not found: {img_path}")
-        generated, findings = generate_one(processor, model, classifier, img_path)
+            # Fall back to the VLM column / raw images dir (Phase 4.2 CSVs).
+            for cand in [Path(str(row.get("vlm_image_path", "")).replace("\\", "/")),
+                         Path("data/images") / img_path.name]:
+                if str(cand) and cand.is_file():
+                    img_path = cand
+                    break
+            else:
+                raise FileNotFoundError(f"Image not found: {img_path}")
+
+        generated = generate_one(processor, model, img_path)
+        findings = get_predicted_findings(classifier, img_path) if classifier else []
         results.append({
             "sample_id": row["sample_id"],
             "uid": row["uid"],
@@ -133,15 +103,15 @@ def main():
             "generated_report": generated,
             "predicted_findings": findings,
         })
-        print(f"Processed {img_path.name}  |  predicted: {findings}")
+        print(f"Processed {img_path.name}  |  findings: {findings}")
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
         json.dumps(results, indent=2, ensure_ascii=False),
-        encoding="utf-8"
+        encoding="utf-8",
     )
-    print(f"All done – results saved to {out_path}")
+    print(f"All done - results saved to {out_path}")
 
 
 if __name__ == "__main__":

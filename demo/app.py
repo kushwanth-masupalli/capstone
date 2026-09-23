@@ -31,7 +31,7 @@ from explainability.gradcam import generate_gradcam
 from inference.pipeline import run_report
 from hallucination.check import extract_findings, compare_hallucination
 
-st.title("Chest X-Ray Report Generator (Qwen-2-VL-2B LoRA)")
+st.title("Chest X-Ray Report Generator (MedGemma LoRA)")
 
 uploaded = st.file_uploader("Upload a frontal X-ray image (PNG/JPG)", type=["png", "jpg", "jpeg"])
 # Optional free-form patient history – not used in current demo but kept for future extension.

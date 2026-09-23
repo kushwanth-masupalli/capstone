@@ -1,0 +1,32 @@
+{
+  "policy": "strip",
+  "dup_cap": 3,
+  "vlm_size": 896,
+  "train": {
+    "rows_before": 2320,
+    "rows_after": 1994,
+    "rows_dropped": 326,
+    "exact_dup_reports": 577,
+    "xxxx_frac_raw": 0.4159,
+    "xxxx_frac_clean": 0.0009,
+    "missing_images": 0
+  },
+  "validation": {
+    "rows_before": 494,
+    "rows_after": 494,
+    "rows_dropped": 0,
+    "exact_dup_reports": 75,
+    "xxxx_frac_raw": 0.4372,
+    "xxxx_frac_clean": 0.0,
+    "missing_images": 0
+  },
+  "test": {
+    "rows_before": 493,
+    "rows_after": 493,
+    "rows_dropped": 0,
+    "exact_dup_reports": 78,
+    "xxxx_frac_raw": 0.432,
+    "xxxx_frac_clean": 0.0,
+    "missing_images": 0
+  }
+}
