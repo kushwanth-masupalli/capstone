@@ -1,25 +1,15 @@
-<<<<<<< HEAD
 # Model weights
 *.pt
 *.pth
 *.ckpt
 *.safetensors
-
-# Data
-data/
-*.csv
-!data/.gitkeep
-=======
-# Large model files
-*.pt
-*.pth
 *.onnx
 *.h5
 
-# Dataset images (too large for git)
-data/images/*.png
-data/images/preprocessed/
->>>>>>> 1a48c73 (pre processing done)
+# Data (too large for git)
+data/
+*.csv
+!data/.gitkeep
 
 # GAN-generated synthetic images (regenerated on demand)
 data/synthetic/
@@ -32,23 +22,6 @@ data/pseudo_probs.npz
 # Python
 __pycache__/
 *.pyc
-<<<<<<< HEAD
-venv/
-.venv/
-*.egg-info/
-
-# Env / secrets
-.env
-*.key
-
-# Checkpoints
-checkpoints/
-!checkpoints/.gitkeep
-
-# Jupyter
-.ipynb_checkpoints/
-=======
-*.pyo
 venv/
 .venv/
 *.egg-info/
@@ -61,16 +34,25 @@ build/
 *.swp
 *.swo
 
-# Environment
+# Env / secrets
 .env
 .env.local
->>>>>>> 1a48c73 (pre processing done)
+*.key
+
+# Checkpoints
+checkpoints/
+!checkpoints/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
 
 # OS
 .DS_Store
 Thumbs.db
 
-<<<<<<< HEAD
+# Large documents
+plan.pdf
+
 # Vector DB local storage
 *.faiss
 chroma_db/
@@ -78,12 +60,5 @@ chroma_db/
 # Logs
 *.log
 logs/
-=======
-# Logs
-*.log
 wandb/
 runs/
->>>>>>> 1a48c73 (pre processing done)
-
-
-checkpoints/
